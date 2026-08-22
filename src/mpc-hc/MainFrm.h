@@ -213,6 +213,7 @@ public:
 private:
     EventClient m_eventc;
     void EventCallback(MpcEvent ev);
+    void AutoSkipChapterIfNeeded();
 
     CMainFrameMouseHook m_mouseHook;
 
@@ -452,6 +453,7 @@ private:
     int m_nLoops;
     ABRepeat abRepeat, reloadABRepeat;
     UINT m_nLastSkipDirection;
+    long m_nLastAutoSkipChapter = -1;
 
     int m_iStreamPosPollerInterval;
 

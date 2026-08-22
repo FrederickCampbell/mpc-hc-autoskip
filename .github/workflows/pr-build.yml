@@ -1,0 +1,26 @@
+name: Validate AutoSkip PR
+
+on:
+  pull_request:
+    branches: [autoskip]
+
+permissions:
+  contents: read
+
+jobs:
+  x64-build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify AutoSkip source markers
+        shell: pwsh
+        run: ./.autoskip/Verify-AutoSkipPatch.ps1
+
+      - name: Build MPC-HC x64
+        shell: pwsh
+        run: ./.autoskip/Build-X64.ps1

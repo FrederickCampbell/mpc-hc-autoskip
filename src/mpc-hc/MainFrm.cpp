@@ -2269,6 +2269,64 @@ bool g_bExternalSubtitleTime = false;
 bool g_bExternalSubtitle = false;
 double g_dRate = 1.0;
 
+// MPC-HC AutoSkip: chapter matcher
+void CMainFrame::AutoSkipChapterIfNeeded()
+{
+    const CAppSettings& s = AfxGetAppSettings();
+
+    if (!s.bAutoSkipChapters
+            || s.sAutoSkipChapterPatterns.IsEmpty()
+            || GetPlaybackMode() != PM_FILE
+            || GetMediaState() != State_Running
+            || !m_pMS
+            || !m_pCB) {
+        m_nLastAutoSkipChapter = -1;
+        return;
+    }
+
+    REFERENCE_TIME rtNow = 0;
+    if (FAILED(m_pMS->GetCurrentPosition(&rtNow))) {
+        return;
+    }
+
+    CComBSTR bstr;
+    const long currentChap = m_pCB->ChapLookup(&rtNow, &bstr);
+    if (currentChap < 0 || !bstr.Length()) {
+        m_nLastAutoSkipChapter = -1;
+        return;
+    }
+
+    CString title(bstr.m_str);
+    CString titleLower(title);
+    titleLower.MakeLower();
+
+    bool match = false;
+    int pos = 0;
+    do {
+        CString token = s.sAutoSkipChapterPatterns.Tokenize(_T(";"), pos);
+        token.Trim();
+        token.MakeLower();
+        if (!token.IsEmpty() && titleLower.Find(token) >= 0) {
+            match = true;
+            break;
+        }
+    } while (pos != -1);
+
+    if (!match) {
+        m_nLastAutoSkipChapter = -1;
+        return;
+    }
+
+    // Debounce the stream-position timer. A subsequent matching chapter has a
+    // different index and can therefore be skipped immediately as well.
+    if (m_nLastAutoSkipChapter == currentChap) {
+        return;
+    }
+
+    m_nLastAutoSkipChapter = currentChap;
+    PostMessage(WM_COMMAND, ID_NAVIGATE_SKIPFORWARD);
+}
+
 void CMainFrame::OnTimer(UINT_PTR nIDEvent)
 {
     switch (nIDEvent) {
@@ -2282,6 +2340,7 @@ void CMainFrame::OnTimer(UINT_PTR nIDEvent)
             break;
         case TIMER_STREAMPOSPOLLER:
             if (GetLoadState() == MLS::LOADED) {
+                AutoSkipChapterIfNeeded();
                 REFERENCE_TIME rtNow = 0, rtDur = 0;
                 switch (GetPlaybackMode()) {
                     case PM_FILE:

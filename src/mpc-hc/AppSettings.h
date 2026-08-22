@@ -728,6 +728,8 @@ public:
     bool            bSaveImageCurrentTime;
     bool            bAllowInaccurateFastseek;
     bool            bLoopFolderOnPlayNextFile;
+    bool            bAutoSkipChapters;
+    CString         sAutoSkipChapterPatterns;
     bool            bNextFileInFolderSortByDate;
     bool            bLockNoPause;
     bool            bPreventDisplaySleep;

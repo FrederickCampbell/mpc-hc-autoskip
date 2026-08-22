@@ -161,6 +161,8 @@ void CPPageAdvanced::InitSettings()
 
     addHeaderItem(ResStr(IDS_PPAGEADVANCED_GRP_PLAYBACK));
     addBoolItem(LOOP_FOLDER_NEXT_FILE, IDS_RS_LOOP_FOLDER_NEXT_FILE, false, s.bLoopFolderOnPlayNextFile, StrRes(IDS_PPAGEADVANCED_LOOP_FOLDER_NEXT_FILE));
+    addBoolItem(AUTOSKIP_CHAPTERS, L"AutoSkipChapters", true, s.bAutoSkipChapters, L"Automatically skip file chapters whose title matches AutoSkipChapterPatterns.");
+    addCStringItem(AUTOSKIP_CHAPTER_PATTERNS, L"AutoSkipChapterPatterns", L"opening;ending;yokoku;preview", s.sAutoSkipChapterPatterns, L"Semicolon-separated, case-insensitive substrings. Example: opening;ending;yokoku;preview");
     addBoolItem(NEXT_FILE_SORT_BY_DATE, IDS_RS_NEXT_FILE_SORT_BY_DATE, false, s.bNextFileInFolderSortByDate, L"Sort files by creation time instead of file name when skipping to the next/previous file in a folder.");
     addBoolItem(LOCK_NOPAUSE, IDS_RS_LOCK_NOPAUSE, false, s.bLockNoPause, StrRes(IDS_PPAGEADVANCED_LOCK_NOPAUSE));
     addBoolItem(PREVENT_DISPLAY_SLEEP, IDS_RS_PREVENT_DISPLAY_SLEEP, true, s.bPreventDisplaySleep, StrRes(IDS_PPAGEADVANCED_PREVENT_DISPLAY_SLEEP));

@@ -1,0 +1,246 @@
+name: AutoSync + Build AutoSkip
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [autoskip]
+  schedule:
+    - cron: '17 12 * * *'
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  UPSTREAM_REPO: clsid2/mpc-hc
+  UPSTREAM_BRANCH: develop
+
+jobs:
+  sync-build-release:
+    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout AutoSkip branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Configure Git
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if (-not (git remote | Select-String '^upstream$')) {
+            git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git"
+          }
+          git remote set-url upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git"
+
+      - name: Fetch and merge upstream when needed
+        id: sync
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          git fetch upstream "${{ env.UPSTREAM_BRANCH }}" --tags
+
+          $upstreamSha = (git rev-parse "upstream/${{ env.UPSTREAM_BRANCH }}").Trim()
+          $upstreamShort = $upstreamSha.Substring(0, 8)
+          "upstream_sha=$upstreamSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "upstream_short=$upstreamShort" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          git merge-base --is-ancestor $upstreamSha HEAD
+          $alreadyContains = ($LASTEXITCODE -eq 0)
+          $forceBuild = "${{ github.event_name }}" -in @('workflow_dispatch', 'push')
+
+          if ($alreadyContains) {
+            "had_merge=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            if ($forceBuild) {
+              "build_needed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              Write-Host "Already current with upstream; manual dispatch requested a rebuild."
+            } else {
+              "build_needed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              Write-Host "No upstream changes. Nothing to build."
+            }
+            exit 0
+          }
+
+          Write-Host "Merging upstream/${{ env.UPSTREAM_BRANCH }} ($upstreamShort)..."
+          git merge --no-edit "upstream/${{ env.UPSTREAM_BRANCH }}"
+          if ($LASTEXITCODE -ne 0) {
+            "sync_failed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "build_needed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            git status --short
+            exit 21
+          }
+
+          "had_merge=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "build_needed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Open issue for merge conflict
+        if: failure() && steps.sync.outputs.sync_failed == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $sha = "${{ steps.sync.outputs.upstream_short }}"
+          if (-not $sha) { $sha = 'unknown' }
+          $title = "AutoSync conflict with upstream $sha"
+          $existing = gh issue list --state open --search "`"$title`" in:title" --json number --jq '.[0].number'
+          if (-not $existing) {
+            $body = @"
+          Automatic merge from `clsid2/mpc-hc:${{ env.UPSTREAM_BRANCH }}` conflicted with the AutoSkip fork.
+
+          Upstream SHA: `${{ steps.sync.outputs.upstream_sha }}`
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          The working release was **not** replaced or pushed. Resolve the source conflict, run the build, then close this issue.
+          "@
+            gh issue create --title $title --body $body
+          }
+
+      - name: Stop after merge conflict
+        if: failure() && steps.sync.outputs.sync_failed == 'true'
+        shell: pwsh
+        run: exit 1
+
+      - name: Refresh submodules
+        if: steps.sync.outputs.build_needed == 'true'
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Verify AutoSkip source markers
+        if: steps.sync.outputs.build_needed == 'true'
+        shell: pwsh
+        run: ./.autoskip/Verify-AutoSkipPatch.ps1
+
+      - name: Build MPC-HC x64
+        id: build
+        if: steps.sync.outputs.build_needed == 'true'
+        continue-on-error: true
+        shell: pwsh
+        run: ./.autoskip/Build-X64.ps1
+
+      - name: Upload failed build logs
+        if: steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-build-logs-${{ steps.sync.outputs.upstream_short }}
+          path: bin/logs/**
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Open issue for build break
+        if: steps.build.outcome == 'failure'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $sha = "${{ steps.sync.outputs.upstream_short }}"
+          $title = "AutoSkip build broken on upstream $sha"
+          $existing = gh issue list --state open --search "`"$title`" in:title" --json number --jq '.[0].number'
+          if (-not $existing) {
+            $body = @"
+          Upstream merged cleanly, but the AutoSkip x64 build failed.
+
+          Upstream SHA: `${{ steps.sync.outputs.upstream_sha }}`
+          Workflow/logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          GitHub intentionally did **not** push the upstream merge and did **not** publish a replacement release, so the last working build remains available.
+          "@
+            gh issue create --title $title --body $body
+          }
+
+      - name: Fail safely when build failed
+        if: steps.build.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
+
+      - name: Push tested upstream merge
+        if: steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success' && steps.sync.outputs.had_merge == 'true'
+        shell: pwsh
+        run: git push origin HEAD:${{ github.ref_name }}
+
+      - name: Package x64 build
+        id: package
+        if: steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success'
+        shell: pwsh
+        run: |
+          $version = (Get-Content '.autoskip\VERSION' -Raw).Trim()
+          $sha = "${{ steps.sync.outputs.upstream_short }}"
+          $forkSha = (git rev-parse --short=8 HEAD).Trim()
+          $tag = "autoskip-v$version-upstream-$sha-fork-$forkSha"
+          $zip = "MPC-HC-AutoSkip-x64-v$version-upstream-$sha-fork-$forkSha.zip"
+
+          $stage = Join-Path $env:RUNNER_TEMP 'mpc-hc-autoskip-release'
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $stage -ItemType Directory | Out-Null
+          Copy-Item 'bin\mpc-hc_x64\*' $stage -Recurse -Force
+
+          # Keep the release ZIP runtime-focused instead of shipping hundreds
+          # of MB of compiler/debug artifacts.
+          $buildOnlyExtensions = @('.pdb', '.lib', '.exp', '.ilk', '.iobj', '.ipdb')
+          Get-ChildItem $stage -Recurse -File | Where-Object {
+            $buildOnlyExtensions -contains $_.Extension.ToLowerInvariant()
+          } | Remove-Item -Force
+
+          New-Item (Join-Path $stage 'Shaders') -ItemType Directory -Force | Out-Null
+          New-Item (Join-Path $stage 'Shaders11') -ItemType Directory -Force | Out-Null
+          Copy-Item 'src\mpc-hc\res\shaders\dx9\*.hlsl' (Join-Path $stage 'Shaders') -Force
+          Copy-Item 'src\mpc-hc\res\shaders\dx11\*.hlsl' (Join-Path $stage 'Shaders11') -Force
+          Copy-Item 'COPYING.txt' $stage -Force
+
+          @"
+          MPC-HC AutoSkip $version
+          Upstream: ${{ env.UPSTREAM_REPO }}@${{ steps.sync.outputs.upstream_sha }}
+          Fork commit: $(git rev-parse HEAD)
+          Build: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          AutoSkip UI:
+          Options > Advanced > Playback
+            AutoSkipChapters = True
+            AutoSkipChapterPatterns = opening;ending;yokoku;preview
+          "@ | Set-Content (Join-Path $stage 'AUTOSKIP-BUILD.txt') -Encoding utf8
+
+          Compress-Archive -Path "$stage\*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "zip=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload build artifact
+        if: steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MPC-HC-AutoSkip-x64-${{ steps.sync.outputs.upstream_short }}
+          path: ${{ steps.package.outputs.zip }}
+          retention-days: 30
+
+      - name: Publish/update GitHub release
+        if: steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $tag = "${{ steps.package.outputs.tag }}"
+          $zip = "${{ steps.package.outputs.zip }}"
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip --clobber --repo "${{ github.repository }}"
+          } else {
+            $notes = @"
+          Automatic x64 build of MPC-HC with native chapter AutoSkip.
+
+          Upstream: `${{ env.UPSTREAM_REPO }}@${{ steps.sync.outputs.upstream_sha }}`
+
+          Configure in **Options > Advanced > Playback**:
+          - `AutoSkipChapters`
+          - `AutoSkipChapterPatterns`
+          "@
+            gh release create $tag $zip --repo "${{ github.repository }}" --title "MPC-HC AutoSkip $tag" --notes $notes --latest
+          }

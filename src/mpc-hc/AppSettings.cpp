@@ -1347,6 +1347,8 @@ void CAppSettings::SaveSettings(bool write_full_history /* = false */)
 
     pApp->WriteProfileInt(IDS_R_SETTINGS, IDS_RS_ALLOW_INACCURATE_FASTSEEK, bAllowInaccurateFastseek);
     pApp->WriteProfileInt(IDS_R_SETTINGS, IDS_RS_LOOP_FOLDER_NEXT_FILE, bLoopFolderOnPlayNextFile);
+    pApp->WriteProfileInt(IDS_R_SETTINGS, IDS_RS_AUTOSKIP_CHAPTERS, bAutoSkipChapters);
+    pApp->WriteProfileString(IDS_R_SETTINGS, IDS_RS_AUTOSKIP_CHAPTER_PATTERNS, sAutoSkipChapterPatterns);
     pApp->WriteProfileInt(IDS_R_SETTINGS, IDS_RS_NEXT_FILE_SORT_BY_DATE, bNextFileInFolderSortByDate);
 
     pApp->WriteProfileInt(IDS_R_SETTINGS, IDS_RS_LOCK_NOPAUSE, bLockNoPause);
@@ -2334,6 +2336,8 @@ void CAppSettings::LoadSettings()
 
     bAllowInaccurateFastseek = !!pApp->GetProfileInt(IDS_R_SETTINGS, IDS_RS_ALLOW_INACCURATE_FASTSEEK, FALSE);
     bLoopFolderOnPlayNextFile = !!pApp->GetProfileInt(IDS_R_SETTINGS, IDS_RS_LOOP_FOLDER_NEXT_FILE, FALSE);
+    bAutoSkipChapters = !!pApp->GetProfileInt(IDS_R_SETTINGS, IDS_RS_AUTOSKIP_CHAPTERS, TRUE);
+    sAutoSkipChapterPatterns = pApp->GetProfileString(IDS_R_SETTINGS, IDS_RS_AUTOSKIP_CHAPTER_PATTERNS, _T("opening;ending;yokoku;preview"));
     bNextFileInFolderSortByDate = !!pApp->GetProfileInt(IDS_R_SETTINGS, IDS_RS_NEXT_FILE_SORT_BY_DATE, FALSE);
 
     bLockNoPause = !!pApp->GetProfileInt(IDS_R_SETTINGS, IDS_RS_LOCK_NOPAUSE, FALSE);
