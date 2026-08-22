@@ -62,8 +62,7 @@ $mingw64 = Join-Path $msys 'mingw64'
 
 $requiredMinGWFiles = @(
     (Join-Path $mingw64 'i686-w64-mingw32\lib\libmingwex.a'),
-    (Join-Path $mingw64 'x86_64-w64-mingw32\lib\libmingwex.a'),
-    (Join-Path $mingw64 'include\bzlib.h')
+    (Join-Path $mingw64 'x86_64-w64-mingw32\lib\libmingwex.a')
 )
 
 $needsMpcToolchain = @(
@@ -125,10 +124,34 @@ foreach ($required in $requiredMinGWFiles) {
     }
 }
 
+$bzipHeader = Get-ChildItem `
+    -LiteralPath $mingw64 `
+    -Recurse `
+    -Filter 'bzlib.h' `
+    -File `
+    -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match '[\\/]x86_64-w64-mingw32[\\/]' } |
+    Select-Object -First 1
+
+if (-not $bzipHeader) {
+    $bzipHeader = Get-ChildItem `
+        -LiteralPath $mingw64 `
+        -Recurse `
+        -Filter 'bzlib.h' `
+        -File `
+        -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+}
+
 Write-Host 'MPC-HC MinGW toolchain ready:' -ForegroundColor Green
 Write-Host "  i686 libmingwex:   $($requiredMinGWFiles[0])"
 Write-Host "  x64 libmingwex:    $($requiredMinGWFiles[1])"
-Write-Host "  bzip2 header:       $($requiredMinGWFiles[2])"
+
+if ($bzipHeader) {
+    Write-Host "  bzip2 header:       $($bzipHeader.FullName)"
+} else {
+    Write-Warning 'bzlib.h was not located by the diagnostic scan; the actual MPC-HC build will verify bzip2 availability.'
+}
 
 # Current LAV/FFmpeg build scripts explicitly use NASM for x86 assembly.
 $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
@@ -245,4 +268,5 @@ if (-not $exe) {
 }
 
 Write-Host "Built successfully: $($exe.FullName)" -ForegroundColor Green
+
 
