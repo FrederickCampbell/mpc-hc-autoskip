@@ -267,6 +267,46 @@ if (-not $exe) {
     throw 'Build reported success but no MPC-HC x64 executable was produced.'
 }
 
-Write-Host "Built successfully: $($exe.FullName)" -ForegroundColor Green
+# Stage the external runtime files that the official MPC-HC installer ships
+# alongside the compiled player. These are not produced in bin\mpc-hc_x64.
+$runtimeDir = Split-Path $exe.FullName -Parent
 
+foreach ($dll in @('D3DCompiler_47.dll', 'D3DX9_43.dll')) {
+    $source = Join-Path 'distrib\x64' $dll
+
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Required MPC-HC runtime file is missing: $source"
+    }
+
+    Copy-Item $source $runtimeDir -Force
+}
+
+# MPC Video Renderer runtime files.
+# Pin the component revision so releases are reproducible.
+$mpcvrCommit = 'edeec6a27d9469cc5f284576ed17a8c59f16d9e4'
+$mpcvrDir = Join-Path $runtimeDir 'MPCVR'
+$mpcvrFile = Join-Path $mpcvrDir 'MpcVideoRenderer64.ax'
+$mpcvrUrl = "https://raw.githubusercontent.com/Aleksoid1978/MPC_components/$mpcvrCommit/MpcVideoRenderer/MpcVideoRenderer64.ax"
+
+New-Item $mpcvrDir -ItemType Directory -Force | Out-Null
+
+Invoke-WebRequest `
+    -Uri $mpcvrUrl `
+    -OutFile $mpcvrFile `
+    -UseBasicParsing
+
+if (-not (Test-Path -LiteralPath $mpcvrFile)) {
+    throw 'MPC Video Renderer could not be staged.'
+}
+
+if ((Get-Item $mpcvrFile).Length -lt 500KB) {
+    throw 'Staged MPC Video Renderer is unexpectedly small.'
+}
+
+Write-Host 'Runtime package files staged:' -ForegroundColor Green
+Write-Host "  D3DCompiler_47.dll"
+Write-Host "  D3DX9_43.dll"
+Write-Host "  MPCVR\MpcVideoRenderer64.ax"
+
+Write-Host "Built successfully: $($exe.FullName)" -ForegroundColor Green
 
