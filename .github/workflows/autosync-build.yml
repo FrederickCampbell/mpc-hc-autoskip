@@ -81,6 +81,7 @@ jobs:
 
       - name: Open issue for merge conflict
         if: failure() && steps.sync.outputs.sync_failed == 'true'
+        continue-on-error: true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -137,6 +138,7 @@ jobs:
 
       - name: Open issue for build break
         if: steps.build.outcome == 'failure'
+        continue-on-error: true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

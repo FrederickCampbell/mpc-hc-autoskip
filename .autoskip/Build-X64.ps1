@@ -66,31 +66,49 @@ if (-not $nasm) {
     choco install nasm -y --no-progress
     Assert-LastExitCode 'Chocolatey could not install NASM'
 
-    # Chocolatey updates the persistent PATH, but the current PowerShell
-    # process does not automatically inherit it.
-    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = "$machinePath;$userPath;$env:Path"
+    # Chocolatey's NASM installer places the x64 build here.
+    $nasmExe = Join-Path $env:ProgramFiles 'NASM\nasm.exe'
 
-    $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
-}
-
-if (-not $nasm) {
-    $candidate = Get-ChildItem 'C:\ProgramData\chocolatey' `
-        -Recurse `
-        -Filter nasm.exe `
-        -File `
-        -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-
-    if ($candidate) {
-        $env:Path = "$($candidate.DirectoryName);$env:Path"
+    if (Test-Path -LiteralPath $nasmExe) {
+        $nasmDir = Split-Path $nasmExe -Parent
+        $env:Path = "$nasmDir;$env:Path"
         $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
     }
 }
 
+# Also refresh the persistent Windows PATH in case Chocolatey registered it.
 if (-not $nasm) {
-    throw 'NASM installation completed but nasm.exe still could not be located.'
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $env:Path = "$machinePath;$userPath;$env:Path"
+    $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
+}
+
+# Last-resort discovery for future NASM/Chocolatey layout changes.
+if (-not $nasm) {
+    $roots = @(
+        (Join-Path $env:ProgramFiles 'NASM'),
+        'C:\ProgramData\chocolatey'
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+
+    foreach ($root in $roots) {
+        $candidate = Get-ChildItem $root `
+            -Recurse `
+            -Filter nasm.exe `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+        if ($candidate) {
+            $env:Path = "$($candidate.DirectoryName);$env:Path"
+            $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
+            if ($nasm) { break }
+        }
+    }
+}
+
+if (-not $nasm) {
+    throw 'NASM installation succeeded, but nasm.exe could not be located.'
 }
 
 Write-Host "NASM:         $($nasm.Source)"
@@ -153,4 +171,5 @@ if (-not $exe) {
 }
 
 Write-Host "Built successfully: $($exe.FullName)" -ForegroundColor Green
+
 
