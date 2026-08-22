@@ -52,8 +52,83 @@ Write-Host "MSYS2:        $msys"
 
 $bash = Join-Path $msys 'usr\bin\bash.exe'
 if (-not (Test-Path -LiteralPath $bash)) { throw "MSYS2 bash is missing: $bash" }
-& $bash -lc 'pacman -Sy --needed --noconfirm make pkgconf diffutils mingw-w64-x86_64-gcc'
+# MPC-HC uses MSYS2 for shell/build utilities, but its official build
+# environment uses a custom dual-architecture MinGW toolchain rather than
+# MSYS2's normal mingw-w64-x86_64-gcc package.
+& $bash -lc 'pacman -Sy --needed --noconfirm make pkgconf diffutils'
 Assert-LastExitCode 'MSYS2 package setup failed'
+
+$mingw64 = Join-Path $msys 'mingw64'
+
+$requiredMinGWFiles = @(
+    (Join-Path $mingw64 'i686-w64-mingw32\lib\libmingwex.a'),
+    (Join-Path $mingw64 'x86_64-w64-mingw32\lib\libmingwex.a'),
+    (Join-Path $mingw64 'include\bzlib.h')
+)
+
+$needsMpcToolchain = @(
+    $requiredMinGWFiles | Where-Object {
+        -not (Test-Path -LiteralPath $_)
+    }
+).Count -gt 0
+
+if ($needsMpcToolchain) {
+    Write-Host 'Installing MPC-HC recommended dual-architecture MinGW toolchain...' -ForegroundColor Cyan
+
+    $toolchainUrl = 'https://files.1f0.de/mingw/mingw-w64-gcc-15.3-stable-r45.7z'
+
+    $tempRoot = if ($env:RUNNER_TEMP) {
+        $env:RUNNER_TEMP
+    } else {
+        [IO.Path]::GetTempPath()
+    }
+
+    $archive = Join-Path $tempRoot 'mpc-hc-mingw-r45.7z'
+
+    $sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
+
+    if (-not $sevenZip) {
+        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            throw '7-Zip is required to install the MPC-HC MinGW toolchain.'
+        }
+
+        choco install 7zip.commandline -y --no-progress
+        Assert-LastExitCode 'Chocolatey could not install 7-Zip'
+
+        $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
+        $env:Path = "$machinePath;$userPath;$env:Path"
+
+        $sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
+    }
+
+    if (-not $sevenZip) {
+        throw '7z.exe could not be located.'
+    }
+
+    Invoke-WebRequest `
+        -Uri $toolchainUrl `
+        -OutFile $archive `
+        -UseBasicParsing
+
+    New-Item $mingw64 -ItemType Directory -Force | Out-Null
+
+    & $sevenZip.Source x $archive "-o$mingw64" -y
+    Assert-LastExitCode 'Could not extract MPC-HC MinGW toolchain'
+
+    Remove-Item $archive -Force -ErrorAction SilentlyContinue
+}
+
+foreach ($required in $requiredMinGWFiles) {
+    if (-not (Test-Path -LiteralPath $required)) {
+        throw "MPC-HC MinGW toolchain is incomplete: $required"
+    }
+}
+
+Write-Host 'MPC-HC MinGW toolchain ready:' -ForegroundColor Green
+Write-Host "  i686 libmingwex:   $($requiredMinGWFiles[0])"
+Write-Host "  x64 libmingwex:    $($requiredMinGWFiles[1])"
+Write-Host "  bzip2 header:       $($requiredMinGWFiles[2])"
 
 # Current LAV/FFmpeg build scripts explicitly use NASM for x86 assembly.
 $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
@@ -124,7 +199,6 @@ python -m pip install --disable-pip-version-check --quiet --upgrade polib
 Assert-LastExitCode 'pip could not install polib'
 
 $pythonRoot = Split-Path (Get-Command python.exe).Source -Parent
-$mingw64 = Join-Path $msys 'mingw64'
 if (-not (Test-Path -LiteralPath (Join-Path $mingw64 'bin\x86_64-w64-mingw32-gcc.exe'))) {
     throw "MinGW x64 cross compiler is missing under $mingw64"
 }
@@ -171,5 +245,4 @@ if (-not $exe) {
 }
 
 Write-Host "Built successfully: $($exe.FullName)" -ForegroundColor Green
-
 
