@@ -56,17 +56,46 @@ if (-not (Test-Path -LiteralPath $bash)) { throw "MSYS2 bash is missing: $bash" 
 Assert-LastExitCode 'MSYS2 package setup failed'
 
 # Current LAV/FFmpeg build scripts explicitly use NASM for x86 assembly.
-if (-not (Get-Command nasm.exe -ErrorAction SilentlyContinue)) {
+$nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
+
+if (-not $nasm) {
     if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
         throw 'NASM is missing and Chocolatey is unavailable.'
     }
+
     choco install nasm -y --no-progress
     Assert-LastExitCode 'Chocolatey could not install NASM'
+
+    # Chocolatey updates the persistent PATH, but the current PowerShell
+    # process does not automatically inherit it.
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $env:Path = "$machinePath;$userPath;$env:Path"
+
+    $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
 }
-if (-not (Get-Command nasm.exe -ErrorAction SilentlyContinue)) {
-    throw 'NASM installation completed but nasm.exe is still unavailable on PATH.'
+
+if (-not $nasm) {
+    $candidate = Get-ChildItem 'C:\ProgramData\chocolatey' `
+        -Recurse `
+        -Filter nasm.exe `
+        -File `
+        -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    if ($candidate) {
+        $env:Path = "$($candidate.DirectoryName);$env:Path"
+        $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
+    }
 }
-Write-Host "NASM:         $((Get-Command nasm.exe).Source)"
+
+if (-not $nasm) {
+    throw 'NASM installation completed but nasm.exe still could not be located.'
+}
+
+Write-Host "NASM:         $($nasm.Source)"
+& $nasm.Source -v
+Assert-LastExitCode 'NASM was located but could not execute'
 
 # Translation resources use polib. Python is preinstalled on GitHub's Windows
 # runners; this also works on a properly prepared local developer machine.
@@ -124,3 +153,4 @@ if (-not $exe) {
 }
 
 Write-Host "Built successfully: $($exe.FullName)" -ForegroundColor Green
+
