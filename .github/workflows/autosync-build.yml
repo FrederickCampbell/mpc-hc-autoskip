@@ -244,3 +244,5 @@ jobs:
           "@
             gh release create $tag $zip --repo "${{ github.repository }}" --title "MPC-HC AutoSkip $tag" --notes $notes --latest
           }
+
+# force GitHub Actions registration
