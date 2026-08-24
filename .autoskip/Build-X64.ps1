@@ -244,6 +244,45 @@ SET "MPCHC_WINSDK_VER=$sdkVersion"
 Write-Host 'Generated build.user.bat:' -ForegroundColor DarkGray
 Get-Content -LiteralPath build.user.bat | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
 
+# AutoSkip CI compatibility: prebuild FreeType before the parallel MPC-HC solution build.
+# HarfBuzz consumes freetype2.lib, but the solution does not currently express
+# a direct HarfBuzz -> FreeType dependency. The normal build uses /maxcpucount,
+# so HarfBuzz can race FreeType and fail with LNK1181.
+$repoRoot = [System.IO.Directory]::GetParent($PSScriptRoot).FullName
+$freeTypeLib = [System.IO.Path]::Combine($repoRoot, 'bin', 'lib', 'Release_x64', 'freetype2.lib')
+$vsDevCmd = [System.IO.Path]::Combine($vs, 'Common7', 'Tools', 'VsDevCmd.bat')
+
+if (-not [System.IO.File]::Exists($vsDevCmd)) {
+    throw "Visual Studio developer command script is missing: $vsDevCmd"
+}
+
+Write-Host 'Prebuilding FreeType x64 Release for HarfBuzz...' -ForegroundColor Cyan
+
+$prebuildCommand = "call `"$vsDevCmd`" -no_logo -arch=amd64 -winsdk=$sdkVersion && MSBuild.exe mpc-hc.sln /nologo /consoleloggerparameters:Verbosity=minimal /maxcpucount:1 /nodeReuse:false /target:freetype2 /property:Configuration=Release;Platform=x64"
+
+$oldPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+
+Push-Location -LiteralPath $repoRoot
+try {
+    & $env:ComSpec /d /s /c $prebuildCommand
+    $freeTypeBuildExit = $LASTEXITCODE
+}
+finally {
+    Pop-Location
+    $ErrorActionPreference = $oldPreference
+}
+
+if ($freeTypeBuildExit -ne 0) {
+    throw "FreeType prebuild failed with exit code $freeTypeBuildExit."
+}
+
+if (-not [System.IO.File]::Exists($freeTypeLib)) {
+    throw "FreeType prebuild reported success but did not produce: $freeTypeLib"
+}
+
+Write-Host "FreeType ready: $freeTypeLib" -ForegroundColor Green
+
 Write-Host 'Building MPC-HC x64 Release...' -ForegroundColor Cyan
 $oldPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'

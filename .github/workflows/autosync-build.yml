@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout AutoSkip branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: recursive
@@ -129,7 +129,7 @@ jobs:
 
       - name: Upload failed build logs
         if: steps.build.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: failed-build-logs-${{ steps.sync.outputs.upstream_short }}
           path: bin/logs/**
@@ -216,7 +216,7 @@ jobs:
 
       - name: Upload build artifact
         if: steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: MPC-HC-AutoSkip-x64-${{ steps.sync.outputs.upstream_short }}
           path: ${{ steps.package.outputs.zip }}
