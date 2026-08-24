@@ -268,7 +268,7 @@ if (-not [System.IO.File]::Exists($freeTypeProject)) {
 # Build the FreeType vcxproj directly. Using /target:freetype2 against mpc-hc.sln
 # is invalid here because MSBuild forwards that target name into the projects.
 # SolutionDir is supplied explicitly because src\common.props uses it for OutDir.
-$prebuildCommand = "call `"$vsDevCmd`" -no_logo -arch=amd64 -winsdk=$sdkVersion && MSBuild.exe `"$freeTypeProject`" /nologo /consoleloggerparameters:Verbosity=minimal /maxcpucount:1 /nodeReuse:false /target:Build /property:Configuration=Release /property:Platform=x64 /property:SolutionDir=$solutionDir"
+$prebuildCommand = "call `"$vsDevCmd`" -no_logo -arch=amd64 -winsdk=$sdkVersion && MSBuild.exe `"$freeTypeProject`" /nologo /consoleloggerparameters:Verbosity=minimal /maxcpucount:1 /nodeReuse:false /target:Build /property:Configuration=Release /property:Platform=x64 /property:SolutionDir=$solutionDir /property:MPCHC_WINSDK_VER=$sdkVersion"
 
 $oldPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
