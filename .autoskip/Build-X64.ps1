@@ -258,7 +258,17 @@ if (-not [System.IO.File]::Exists($vsDevCmd)) {
 
 Write-Host 'Prebuilding FreeType x64 Release for HarfBuzz...' -ForegroundColor Cyan
 
-$prebuildCommand = "call `"$vsDevCmd`" -no_logo -arch=amd64 -winsdk=$sdkVersion && MSBuild.exe mpc-hc.sln /nologo /consoleloggerparameters:Verbosity=minimal /maxcpucount:1 /nodeReuse:false /target:freetype2 /property:Configuration=Release;Platform=x64"
+$freeTypeProject = [System.IO.Path]::Combine($repoRoot, 'src', 'thirdparty', 'freetype2', 'freetype2.vcxproj')
+$solutionDir = $repoRoot.TrimEnd('\') + '\'
+
+if (-not [System.IO.File]::Exists($freeTypeProject)) {
+    throw "FreeType project is missing: $freeTypeProject"
+}
+
+# Build the FreeType vcxproj directly. Using /target:freetype2 against mpc-hc.sln
+# is invalid here because MSBuild forwards that target name into the projects.
+# SolutionDir is supplied explicitly because src\common.props uses it for OutDir.
+$prebuildCommand = "call `"$vsDevCmd`" -no_logo -arch=amd64 -winsdk=$sdkVersion && MSBuild.exe `"$freeTypeProject`" /nologo /consoleloggerparameters:Verbosity=minimal /maxcpucount:1 /nodeReuse:false /target:Build /property:Configuration=Release /property:Platform=x64 /property:SolutionDir=$solutionDir"
 
 $oldPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
