@@ -108,9 +108,9 @@ jobs:
                 throw "Unresolved merge conflicts remain: $($remaining -join ', ')"
               }
 
-              git diff --cached --check
+              git diff --cached --check -- $expectedConflict
               if ($LASTEXITCODE -ne 0) {
-                throw 'Resolved merge failed git diff --cached --check.'
+                throw "Resolved merge introduced whitespace errors in $expectedConflict."
               }
 
               git commit --no-edit
@@ -221,14 +221,14 @@ jobs:
           @"
           Latest automatic x64 build of MPC-HC with native chapter AutoSkip.
 
-          - AutoSkip version: `$version`
-          - Upstream: `${{ env.UPSTREAM_REPO }}@${{ steps.sync.outputs.upstream_sha }}`
-          - Fork commit: `$(git rev-parse HEAD)`
+          - AutoSkip version: $version
+          - Upstream: ${{ env.UPSTREAM_REPO }}@${{ steps.sync.outputs.upstream_sha }}
+          - Fork commit: $(git rev-parse HEAD)
           - Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           Configure in **Options > Advanced > Playback**:
-          - `AutoSkipChapters`
-          - `AutoSkipChapterPatterns`
+          - AutoSkipChapters
+          - AutoSkipChapterPatterns
           "@ | Set-Content $notesPath -Encoding utf8
 
           gh release view $tag --repo "${{ github.repository }}" *> $null
