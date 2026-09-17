@@ -89,16 +89,16 @@ jobs:
 
               $text = [IO.File]::ReadAllText($expectedConflict)
               $anchor = '    addBoolItem(LOOP_FOLDER_NEXT_FILE, IDS_RS_LOOP_FOLDER_NEXT_FILE, false, s.bLoopFolderOnPlayNextFile, StrRes(IDS_PPAGEADVANCED_LOOP_FOLDER_NEXT_FILE));'
-              $autoSkip = @'
-    addBoolItem(AUTOSKIP_CHAPTERS, L"AutoSkipChapters", true, s.bAutoSkipChapters, L"Automatically skip file chapters whose title matches AutoSkipChapterPatterns.");
-    addCStringItem(AUTOSKIP_CHAPTER_PATTERNS, L"AutoSkipChapterPatterns", L"opening;ending;yokoku;preview", s.sAutoSkipChapterPatterns, L"Semicolon-separated, case-insensitive substrings. Example: opening;ending;yokoku;preview");
-'@
+              $autoSkip = @(
+                '    addBoolItem(AUTOSKIP_CHAPTERS, L"AutoSkipChapters", true, s.bAutoSkipChapters, L"Automatically skip file chapters whose title matches AutoSkipChapterPatterns.");',
+                '    addCStringItem(AUTOSKIP_CHAPTER_PATTERNS, L"AutoSkipChapterPatterns", L"opening;ending;yokoku;preview", s.sAutoSkipChapterPatterns, L"Semicolon-separated, case-insensitive substrings. Example: opening;ending;yokoku;preview");'
+              ) -join "`r`n"
 
               if (-not $text.Contains($anchor)) {
                 throw "Expected playback-settings anchor was not found in $expectedConflict"
               }
               if (-not $text.Contains('addBoolItem(AUTOSKIP_CHAPTERS')) {
-                $text = $text.Replace($anchor, $anchor + "`r`n" + $autoSkip.TrimEnd("`r", "`n"))
+                $text = $text.Replace($anchor, $anchor + "`r`n" + $autoSkip)
                 [IO.File]::WriteAllText($expectedConflict, $text, [Text.UTF8Encoding]::new($false))
               }
 
