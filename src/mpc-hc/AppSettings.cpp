@@ -2753,6 +2753,8 @@ void CAppSettings::ParseCommandLine(CAtlList<CString>& cmdln)
                 nCLSwitches |= CLSW_MINIMIZED;
             } else if (sw == _T("new")) {
                 nCLSwitches |= CLSW_NEW;
+            } else if (sw == _T("embedding")) { // COM appends -Embedding when it starts a local server
+                nCLSwitches |= CLSW_EMBEDDING;
             } else if (sw == _T("help") || sw == _T("h") || sw == _T("?")) {
                 nCLSwitches |= CLSW_HELP;
             } else if (sw == _T("dub") && pos) {

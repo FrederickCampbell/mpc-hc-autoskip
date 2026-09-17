@@ -62,6 +62,7 @@ class CFullscreenWnd;
 struct DisplayMode;
 enum MpcCaptionState;
 class CMediaTypesDlg;
+class RarEntrySelectorDialog;
 
 interface IDSMChapterBag;
 interface IGraphBuilder2;
@@ -72,6 +73,7 @@ interface IMadVRInfo;
 interface IMadVRFrameGrabber;
 interface IMadVRSettings;
 interface IMadVRSubclassReplacement;
+interface IMPCVRSubclassReplacement;
 interface ISubClock;
 interface ISubPicAllocatorPresenter2;
 interface ISubPicAllocatorPresenter;
@@ -303,6 +305,7 @@ private:
 
     CComPtr<IMadVRSettings> m_pMVRS;
     CComPtr<IMadVRSubclassReplacement> m_pMVRSR;
+    CComPtr<IMPCVRSubclassReplacement> m_pMPCVRSR;
     CComPtr<IMadVRCommand> m_pMVRC;
     CComPtr<IMadVRInfo> m_pMVRI;
     CComPtr<IMadVRFrameGrabber> m_pMVRFG;
@@ -459,6 +462,7 @@ private:
     void AddTextPassThruFilter();
 
     int m_nLoops;
+    bool m_bKeepLoopCountOnStop = false; // set before a skip that closes the file, so OnPlayStop keeps m_nLoops
     ABRepeat abRepeat, reloadABRepeat;
     UINT m_nLastSkipDirection;
     long m_nLastAutoSkipChapter = -1;
@@ -658,6 +662,7 @@ protected:
 
     CCritSec lockModalDialog;
     CMediaTypesDlg* mediaTypesErrorDlg;
+    RarEntrySelectorDialog* rarEntrySelectorDlg;
     void ShowMediaTypesDialog();
 
     void OpenCreateGraphObject(OpenMediaData* pOMD);
@@ -1334,6 +1339,7 @@ public:
 
     void        SetLoadState(MLS eState);
     MLS         GetLoadState() const;
+    void        QueueCommandLine(const CAtlList<CString>& cmdln);
     bool        IsStateLoaded();
     bool        IsStateLoadedOrLoading();
     bool        IsStateClosed();
@@ -1397,6 +1403,7 @@ protected:
     afx_msg void OnMeasureItem(int nIDCtl, LPMEASUREITEMSTRUCT lpMeasureItemStruct);
     // GDI+
     virtual LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam);
+    bool ForwardMessageToRenderer(HWND hWnd, UINT message, WPARAM& wParam, LPARAM& lParam, LRESULT& ret);
     void WTSRegisterSessionNotification();
     void WTSUnRegisterSessionNotification();
 
