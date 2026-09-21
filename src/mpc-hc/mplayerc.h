@@ -107,6 +107,7 @@ enum {
     WM_MPC_LOGOFF,
     WM_MPC_OPENCURPLAYLIST,
     WM_MPC_CMDLINE, // deliberately outside the range purged while closing: a command line must not be dropped
+    WM_MPC_RUN_DEFERRED, // run an open/close/OnClose recorded while a CMainFrame::CDeferredActionScope holder was on the stack
     WM_LAV_PROPPAGE_CALLBACK,
     WM_MPCVR_SWITCH_FULLSCREEN = WM_APP + 4096,
 };
@@ -242,6 +243,9 @@ public:
     bool GetPlaylistSavePath(CString& path);
 
     bool m_fClosingState;
+    // Process exit code. Stays 0 except for a /dvbscan run that could not scan,
+    // which has no other way to tell its caller.
+    int m_nExitCode = 0;
     bool m_bThemeLoaded;
     CRenderersData m_Renderers;
     CString     m_strVersion;
