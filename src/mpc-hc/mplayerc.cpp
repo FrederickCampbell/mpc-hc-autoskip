@@ -310,7 +310,7 @@ static bool FindRedir(const CString& fn, CAtlList<CString>& fns, const std::vect
             }
 
             if (fn2.Find(_T(":")) < 0 && fn2.Find(_T("\\\\")) != 0 && fn2.Find(_T("//")) != 0) {
-                CPath p;
+                CLongPath p;
                 p.Combine(dir, fn2);
                 fn2 = (LPCTSTR)p;
             }
@@ -361,7 +361,7 @@ CString GetContentType(CString fn, CAtlList<CString>* redir)
         }
     }
 
-    CString ext = CPath(fn).GetExtension().MakeLower();
+    CString ext = CLongPath(fn).GetExtension().MakeLower();
     int p = ext.FindOneOf(_T("?#"));
     if (p > 0) {
         ext = ext.Left(p);
@@ -686,9 +686,72 @@ CMPlayerCApp::~CMPlayerCApp()
     while (WAIT_IO_COMPLETION == SleepEx(0, TRUE));
 }
 
+bool CMPlayerCApp::IsHeadlessCmdLine() const
+{
+    return m_bHeadlessCmdLine;
+}
+
+void CMPlayerCApp::ReportCmdLineError(LPCTSTR msg)
+{
+    m_nExitCode = 1;
+
+    // The player is a GUI subsystem process, so there is no console of its own.
+    // Either the caller redirected stderr, or the console the caller is using
+    // has to be borrowed; if it is neither, the exit code is all we can give.
+    static const HANDLE hStdErr = [] {
+        HANDLE h = ::GetStdHandle(STD_ERROR_HANDLE);
+        if (h == nullptr || h == INVALID_HANDLE_VALUE) {
+            if (::AttachConsole(ATTACH_PARENT_PROCESS)) {
+                h = ::GetStdHandle(STD_ERROR_HANDLE);
+            }
+        }
+        return h ? h : INVALID_HANDLE_VALUE;
+    }();
+
+    if (hStdErr == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    CStringW line;
+    line.Format(L"MPC-HC: %s\r\n", msg);
+
+    DWORD dwMode, dwWritten;
+    if (::GetConsoleMode(hStdErr, &dwMode)) {
+        ::WriteConsoleW(hStdErr, line.GetString(), line.GetLength(), &dwWritten, nullptr);
+    } else {
+        // Redirected to a file or a pipe, where the console functions do not apply.
+        int len = WideCharToMultiByte(CP_UTF8, 0, line, line.GetLength(), nullptr, 0, nullptr, nullptr);
+        if (len > 0) {
+            CStringA utf8;
+            WideCharToMultiByte(CP_UTF8, 0, line, line.GetLength(), utf8.GetBufferSetLength(len), len, nullptr, nullptr);
+            utf8.ReleaseBuffer(len);
+            ::WriteFile(hStdErr, utf8.GetString(), len, &dwWritten, nullptr);
+        }
+    }
+}
+
 int CMPlayerCApp::DoMessageBox(LPCTSTR lpszPrompt, UINT nType,
                                UINT nIDPrompt)
 {
+    if (IsHeadlessCmdLine()) {
+        // Nothing can dismiss it, and the message box is synchronous, so showing
+        // one hangs the run for good. Answer as if it had been cancelled, which
+        // agrees to nothing on the absent user's behalf.
+        ReportCmdLineError(lpszPrompt);
+        switch (nType & MB_TYPEMASK) {
+            case MB_OKCANCEL:
+            case MB_YESNOCANCEL:
+            case MB_RETRYCANCEL:
+                return IDCANCEL;
+            case MB_YESNO:
+                return IDNO;
+            case MB_ABORTRETRYIGNORE:
+                return IDABORT;
+            default:
+                return IDOK;
+        }
+    }
+
     if (AppNeedsThemedControls()) {
         CWnd* pParentWnd = CWnd::GetActiveWindow();
         if (pParentWnd == NULL) {
@@ -1021,7 +1084,7 @@ CStringW CMPlayerCApp::ResolveHistoryIniPath()
     if (!GetAppDataPath(appDataDir)) {
         return programPath;
     }
-    CPath historyFileName(programPath);
+    CLongPath historyFileName(programPath);
     historyFileName.StripPath(); // filename incl. extension (PathUtils::FileName drops the extension)
     const CStringW appDataPath = PathUtils::CombinePaths(appDataDir, historyFileName);
 
@@ -1091,7 +1154,7 @@ bool CMPlayerCApp::GetAppDataPath(CString& path)
     if (FAILED(hr)) {
         return false;
     }
-    CPath p;
+    CLongPath p;
     p.Combine(path, _T("MPC-HC"));
     path = (LPCTSTR)p;
 
@@ -2115,6 +2178,8 @@ BOOL CMPlayerCApp::InitInstance()
 
     m_s->ParseCommandLine(m_cmdln);
 
+    m_bHeadlessCmdLine = (m_s->nCLSwitches & CLSW_THUMBNAILS) != 0;
+
     VERIFY(SetCurrentDirectory(PathUtils::GetProgramPath()));
 
     if (m_s->nCLSwitches & (CLSW_HELP | CLSW_UNRECOGNIZEDSWITCH)) { // show commandline help window
@@ -2149,7 +2214,7 @@ BOOL CMPlayerCApp::InitInstance()
         // Remove the current playlist if it exists
         CString strSavePath;
         if (GetPlaylistSavePath(strSavePath)) {
-            CPath playlistPath;
+            CLongPath playlistPath;
             playlistPath.Combine(strSavePath, _T("default.mpcpl"));
 
             if (playlistPath.FileExists()) {

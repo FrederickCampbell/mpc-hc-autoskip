@@ -4736,6 +4736,15 @@ LRESULT CMainFrame::OnOpenMediaFailed(WPARAM wParam, LPARAM lParam)
         PostMessage(WM_CLOSE);
     }
 
+    // OnFilePostOpenmedia is what sends the exit after the thumbnails are saved,
+    // and it never runs when the open fails. Report why and quit rather than sit
+    // idle with the reason on the status bar nobody is looking at.
+    if (AfxGetAppSettings().nCLSwitches & CLSW_THUMBNAILS) {
+        AfxGetAppSettings().nCLSwitches &= ~CLSW_THUMBNAILS;
+        AfxGetMyApp()->ReportCmdLineError(m_closingmsg);
+        PostMessage(WM_CLOSE);
+    }
+
     m_lastOMD.Free();
     m_lastOMD.Attach((OpenMediaData*)lParam);
     if (!m_lastOMD->title) {
@@ -5479,7 +5488,7 @@ void CMainFrame::ProcessCommandLine(CAtlList<CString>& cmdln, ULONGLONG tArrived
     while (pos) {
         CString fullpath = MakeFullPath(s.slFilters.GetNext(pos));
 
-        CPath tmp(fullpath);
+        CLongPath tmp(fullpath);
         tmp.RemoveFileSpec();
         tmp.AddBackslash();
         CString path = tmp;
@@ -5602,7 +5611,7 @@ void CMainFrame::ProcessCommandLine(CAtlList<CString>& cmdln, ULONGLONG tArrived
 
         if (OpenBD(s.slFiles.GetHead())) {
             // Nothing more to do
-        } else if (!fMulti && CPath(s.slFiles.GetHead() + _T("\\VIDEO_TS")).IsDirectory()) {
+        } else if (!fMulti && CLongPath(s.slFiles.GetHead() + _T("\\VIDEO_TS")).IsDirectory()) {
             fSetForegroundWindow = true;
 
             if (GetMediaState() == State_Running) {
@@ -5966,7 +5975,7 @@ DROPEFFECT CMainFrame::OnDropAccept(COleDataObject* pDataObject, DWORD dwKeyStat
 bool CMainFrame::IsImageFile(CStringW fn) {
     if (fn.IsEmpty()) return false;
 
-    CPath path(fn);
+    CLongPath path(fn);
     CStringW ext(path.GetExtension());
     return IsImageFileExt(ext);
 }
@@ -5981,7 +5990,7 @@ bool CMainFrame::IsImageFileExt(CStringW ext) {
 }
 
 bool CMainFrame::IsPlaylistFile(CStringW fn) {
-    CPath path(fn);
+    CLongPath path(fn);
     CStringW ext(path.GetExtension());
     return IsPlaylistFileExt(ext);
 }
@@ -6022,13 +6031,13 @@ BOOL IsSubtitleExtension(CString ext)
 
 BOOL IsSubtitleFilename(CString filename)
 {
-    CString ext = CPath(filename).GetExtension().MakeLower();
+    CString ext = CLongPath(filename).GetExtension().MakeLower();
     return IsSubtitleExtension(ext);
 }
 
 bool CMainFrame::IsAudioFilename(CString filename)
 {
-    CString ext = CPath(filename).GetExtension();
+    CString ext = CLongPath(filename).GetExtension();
     return IsAudioFileExt(ext);
 }
 
@@ -6102,7 +6111,7 @@ void CMainFrame::OnDropFiles(CAtlList<CStringW>& slFiles, DROPEFFECT dropEffect)
             SetSubtitle(subInputSelected);
         }
         if (subloaded) {
-            CPath fn(subfile);
+            CLongPath fn(subfile);
             fn.StripPath();
             CString statusmsg(static_cast<LPCTSTR>(fn));
             SendStatusMessage(statusmsg + ResStr(IDS_SUB_LOADED_SUCCESS), 3000);
@@ -6164,7 +6173,7 @@ void CMainFrame::OnFileSaveAs()
         }
     } else {
         out = PathUtils::StripPathOrUrl(in);
-        ext = CPath(out).GetExtension().MakeLower();
+        ext = CLongPath(out).GetExtension().MakeLower();
         if (ext == _T(".cda")) {
             out = out.Left(out.GetLength() - 4) + _T(".wav");
         } else if (ext == _T(".ifo")) {
@@ -6188,7 +6197,7 @@ void CMainFrame::OnFileSaveAs()
         return;
     }
 
-    CPath p(out);
+    CLongPath p(out);
     if (!ext.IsEmpty()) {
         p.AddExtension(ext);
     }
@@ -6356,7 +6365,11 @@ BYTE* CMainFrame::ConvertDIBTo24bppRGB(BYTE* pData, long size, int& outWidth, in
 
 void CMainFrame::SaveDIB(LPCTSTR fn, BYTE* pData, long size)
 {
-    CPath path(fn);
+    CLongPath path(fn);
+
+    // GDI+ refuses to write to a path at or beyond MAX_PATH unless it carries the long path prefix
+    CString target(fn);
+    ExtendMaxPathLengthIfNeeded(target, true);
 
     int w, h, dstpitch;
     BYTE* p = ConvertDIBTo24bppRGB(pData, size, w, h, dstpitch);
@@ -6419,7 +6432,7 @@ void CMainFrame::SaveDIB(LPCTSTR fn, BYTE* pData, long size)
             }
         }
 
-        Gdiplus::Status s = bm->Save(fn, &encoderClsid, pEncoderParameters);
+        Gdiplus::Status s = bm->Save(target, &encoderClsid, pEncoderParameters);
 
         // All GDI+ objects must be destroyed before GdiplusShutdown is called
         delete bm;
@@ -6747,10 +6760,10 @@ void CMainFrame::SaveImage(LPCWSTR fn, bool displayed, bool includeSubtitles) {
     }
 }
 
-void CMainFrame::SaveThumbnails(LPCTSTR fn)
+bool CMainFrame::SaveThumbnails(LPCTSTR fn)
 {
     if (!m_pMC || !m_pMS || GetPlaybackMode() != PM_FILE /*&& GetPlaybackMode() != PM_DVD*/) {
-        return;
+        return false;
     }
 
     REFERENCE_TIME rtPos = GetPos();
@@ -6758,7 +6771,7 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
 
     if (rtDur <= 0) {
         AfxMessageBox(IDS_THUMBNAILS_NO_DURATION, MB_ICONWARNING | MB_OK, 0);
-        return;
+        return false;
     }
 
     OAFilterState filterState = UpdateCachedMediaState();
@@ -6786,7 +6799,7 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
 
     if (szVideo.cx <= 0 || szVideo.cy <= 0) {
         AfxMessageBox(IDS_THUMBNAILS_NO_FRAME_SIZE, MB_ICONWARNING | MB_OK, 0);
-        return;
+        return false;
     }
 
     // with the overlay mixer IBasicVideo2 won't tell the new AR when changed dynamically
@@ -6814,7 +6827,7 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
     const LONGLONG llImageSize = (LONGLONG)width * llHeight * 4;
     if (llHeight <= 0 || llHeight > 32767 || llImageSize > INT_MAX - (LONGLONG)sizeof(BITMAPINFOHEADER)) {
         AfxMessageBox(IDS_OUT_OF_MEMORY, MB_ICONWARNING | MB_OK, 0);
-        return;
+        return false;
     }
     int height = (int)llHeight;
 
@@ -6823,7 +6836,7 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
     CAutoVectorPtr<BYTE> dib;
     if (!dib.Allocate(dibsize)) {
         AfxMessageBox(IDS_OUT_OF_MEMORY, MB_ICONWARNING | MB_OK, 0);
-        return;
+        return false;
     }
 
     BITMAPINFOHEADER* bih = (BITMAPINFOHEADER*)(BYTE*)dib;
@@ -6867,14 +6880,14 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
     // Ensure the thumbnails aren't ridiculously small so that the time indication can at least fit
     if (szThumbnail.cx < 60 || szThumbnail.cy < 20) {
         AfxMessageBox(IDS_THUMBNAIL_TOO_SMALL, MB_ICONWARNING | MB_OK, 0);
-        return;
+        return false;
     }
 
     // Allocate before muting, so a failure here does not leave the player silent
     std::unique_ptr<BYTE[]> thumb(new(std::nothrow) BYTE[szThumbnail.cx * szThumbnail.cy * 4]);
     if (!thumb) {
         AfxMessageBox(IDS_OUT_OF_MEMORY, MB_ICONWARNING | MB_OK, 0);
-        return;
+        return false;
     }
 
     m_nVolumeBeforeFrameStepping = m_wndToolBar.Volume;
@@ -6903,7 +6916,7 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
                 m_pBA->put_Volume(m_nVolumeBeforeFrameStepping);
             }
             AfxMessageBox(IDS_FRAME_STEP_ERROR_RENDERER, MB_ICONEXCLAMATION | MB_OK, 0);
-            return;
+            return false;
         }
 
         bool abortloop = false;
@@ -6973,7 +6986,7 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
             if (m_pBA) {
                 m_pBA->put_Volume(m_nVolumeBeforeFrameStepping);
             }
-            return;
+            return false;
         }
 
         BITMAPINFO* bi = (BITMAPINFO*)pData;
@@ -6986,7 +6999,7 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
             if (m_pBA) {
                 m_pBA->put_Volume(m_nVolumeBeforeFrameStepping);
             }
-            return;
+            return false;
         }
 
         int sw = bi->bmiHeader.biWidth;
@@ -7097,6 +7110,8 @@ void CMainFrame::SaveThumbnails(LPCTSTR fn)
     }
 
     m_OSD.DisplayMessage(OSD_TOPLEFT, ResStr(IDS_OSD_THUMBS_SAVED), 3000);
+
+    return true;
 }
 
 CString CMainFrame::MakeSnapshotFileName(BOOL thumbnails)
@@ -7219,11 +7234,11 @@ void CMainFrame::OnFileSaveImage()
         return;
     }
 
-    CPath psrc;
+    CLongPath psrc;
     if (!s.strSnapshotPath.IsEmpty() && PathUtils::IsDir(s.strSnapshotPath)) {
         psrc.Combine(s.strSnapshotPath.GetString(), MakeSnapshotFileName(FALSE));
     } else {
-        psrc = CPath(MakeSnapshotFileName(FALSE));        
+        psrc = CLongPath(MakeSnapshotFileName(FALSE));        
     }
 
     bool subtitleOptionSupported = !m_pMVRFG && s.fEnableSubtitles && s.IsISRAutoLoadEnabled();
@@ -7253,7 +7268,7 @@ void CMainFrame::OnFileSaveImage()
         s.strSnapshotExt = _T(".png");
     }
 
-    CPath pdst(fd.GetPathName());
+    CLongPath pdst(fd.GetPathName());
     CString ext(pdst.GetExtension().MakeLower());
     if (ext != s.strSnapshotExt) {
         if (ext == _T(".bmp") || ext == _T(".jpg") || ext == _T(".png")) {
@@ -7314,10 +7329,11 @@ void CMainFrame::OnCmdLineSaveThumbnails()
 
     CPlaylistItem pli;
     if (!m_wndPlaylistBar.GetCur(pli, true)) {
+        AfxGetMyApp()->ReportCmdLineError(_T("no file to take thumbnails of"));
         return;
     }
 
-    CPath psrc(m_wndPlaylistBar.GetCurFileName(true));
+    CLongPath psrc(m_wndPlaylistBar.GetCurFileName(true));
     psrc.RemoveFileSpec();
     psrc.Combine(psrc, MakeSnapshotFileName(TRUE));
 
@@ -7326,9 +7342,19 @@ void CMainFrame::OnCmdLineSaveThumbnails()
     s.iThumbWidth = std::clamp(s.iThumbWidth, 256, 3840);
 
     CString path = (LPCTSTR)psrc;
+    if (path.IsEmpty() || psrc.IsRelative()) {
+        // Combine hands back an unusable destination two ways, neither of them an
+        // error it reports. The result is empty when it refuses a path it cannot
+        // resolve safely; and when the file name arrived without a directory the
+        // result is the bare file name, which SaveDIB would write into the program
+        // folder rather than beside the video, with nothing to say it went astray.
+        AfxGetMyApp()->ReportCmdLineError(_T("thumbnail output path could not be resolved"));
+        return;
+    }
 
-    SaveThumbnails(path);
-
+    if (!SaveThumbnails(path)) {
+        AfxGetMyApp()->m_nExitCode = 1;
+    }
 }
 
 void CMainFrame::OnFileSaveThumbnails()
@@ -7340,7 +7366,7 @@ void CMainFrame::OnFileSaveThumbnails()
         return;
     }
 
-    CPath psrc(s.strSnapshotPath);
+    CLongPath psrc(s.strSnapshotPath);
     psrc.Combine(s.strSnapshotPath, MakeSnapshotFileName(TRUE));
 
     CSaveThumbnailsDialog fd(s.nJpegQuality, s.iThumbRows, s.iThumbCols, s.iThumbWidth, s.strSnapshotExt, (LPCTSTR)psrc,
@@ -7372,7 +7398,7 @@ void CMainFrame::OnFileSaveThumbnails()
     s.iThumbCols = std::clamp(fd.m_cols, 1, 16);
     s.iThumbWidth = std::clamp(fd.m_width, 256, 3840);
 
-    CPath pdst(fd.GetPathName());
+    CLongPath pdst(fd.GetPathName());
     CString ext(pdst.GetExtension().MakeLower());
     if (ext != s.strSnapshotExt) {
         if (ext == _T(".bmp") || ext == _T(".jpg") || ext == _T(".png")) {
@@ -7381,7 +7407,6 @@ void CMainFrame::OnFileSaveThumbnails()
             ext += s.strSnapshotExt;
         }
         if (!pdst.RenameExtension(ext)) {
-            // ToDo: write helper functions for renaming that support long paths
             ASSERT(false);
             return;
         }
@@ -7427,7 +7452,7 @@ void CMainFrame::OnFileSubtitlesLoad()
     ofn.nMaxFile = nBufferSize;
     // Set the current file directory as default folder
     CString curfile = m_wndPlaylistBar.GetCurFileName();
-    CPathW defaultDir; // must outlive DoModal(), ofn.lpstrInitialDir points into it
+    CLongPath defaultDir; // must outlive DoModal(), ofn.lpstrInitialDir points into it
     if (!PathUtils::IsURL(curfile)) {
         ExtendMaxPathLengthIfNeeded(curfile, true);
         defaultDir = curfile.GetString();
@@ -7502,18 +7527,18 @@ void CMainFrame::SubtitlesSave(const TCHAR* directory, bool silent)
         }
         suggestedFileName = _T("subtitle");
     } else {
-        CPath path(lastOpenFile);
+        CLongPath path(lastOpenFile);
         path.RemoveExtension();
         suggestedFileName = CString(path);
     }
 
     if (directory && *directory) {
-        CPath suggestedPath(suggestedFileName);
+        CLongPath suggestedPath(suggestedFileName);
         int pos = suggestedPath.FindFileName();
         CString fileName = suggestedPath.m_strPath.Mid(pos);
-        CPath dirPath(directory);
+        CLongPath dirPath(directory);
         if (dirPath.IsRelative()) {
-            dirPath = CPath(suggestedPath.m_strPath.Left(pos)) += dirPath;
+            dirPath = CLongPath(suggestedPath.m_strPath.Left(pos)) += dirPath;
         }
         if (EnsureDirectory(dirPath)) {
             suggestedFileName = CString(dirPath += fileName);
@@ -8593,7 +8618,7 @@ void CMainFrame::OnViewOSDShowFileName()
                 if (SUCCEEDED(m_pDVDI->GetDVDDirectory(path.GetBuffer(MAX_PATH), MAX_PATH, &len)) && len) {
                     path.ReleaseBuffer();
                     if (path.Find(_T("\\VIDEO_TS")) == 2) {
-                        strOSD.AppendFormat(_T(" - %s"), GetDriveLabel(CPath(path)).GetString());
+                        strOSD.AppendFormat(_T(" - %s"), GetDriveLabel(CLongPath(path)).GetString());
                     } else {
                         strOSD.AppendFormat(_T(" - %s"), path.GetString());
                     }
@@ -11240,7 +11265,7 @@ void CMainFrame::OnSecondarySubtitleLoad()
     OPENFILENAME& ofn = fd.GetOFN();
     // Set the current file directory as default folder
     CString curfile = m_wndPlaylistBar.GetCurFileName();
-    CPathW defaultDir; // must outlive DoModal(), ofn.lpstrInitialDir points into it
+    CLongPath defaultDir; // must outlive DoModal(), ofn.lpstrInitialDir points into it
     if (!PathUtils::IsURL(curfile)) {
         ExtendMaxPathLengthIfNeeded(curfile, true);
         defaultDir = curfile.GetString();
@@ -12506,14 +12531,14 @@ FileFavorite CMainFrame::ParseFavoriteFile(const CString& fav, CAtlList<CString>
         // Get the drive MPC-HC is on and apply it to the path list
         CString exePath = PathUtils::GetProgramPath(true);
 
-        CPath exeDrive(exePath);
+        CLongPath exeDrive(exePath);
 
         if (exeDrive.StripToRoot()) {
             POSITION pos = args.GetHeadPosition();
 
             while (pos != nullptr) {
                 CString& stringPath = args.GetNext(pos);    // Note the reference (!)
-                CPath path(stringPath);
+                CLongPath path(stringPath);
 
                 int rootLength = path.SkipRoot();
 
@@ -14557,7 +14582,7 @@ void CMainFrame::OpenCreateGraphObject(OpenMediaData* pOMD)
             if (PathUtils::IsURL(firstfilename)) {
                 m_bUseSeekPreview = false;
             } else {
-                CString ext = CPath(firstfilename).GetExtension().MakeLower();
+                CString ext = CLongPath(firstfilename).GetExtension().MakeLower();
                 if (IsAudioFileExt(ext) || ext == L".avs" || PathIsOnOpticalDisc(firstfilename)) {
                     m_bUseSeekPreview = false;
                 }
@@ -15018,7 +15043,7 @@ void CMainFrame::OpenFile(OpenFileData* pOFD)
         HRESULT rarHR = E_NOTIMPL;
 #if INTERNAL_SOURCEFILTER_RFS
         if (s.SrcFilters[SRC_RFS] && !PathUtils::IsURL(fn)) {
-            CString ext = CPath(fn).GetExtension().MakeLower();
+            CString ext = CLongPath(fn).GetExtension().MakeLower();
             if (ext == L".rar") {
                 rarHR = HandleMultipleEntryRar(fn, &pOFD->rarEntryIndex);
             }
@@ -15362,7 +15387,7 @@ void CMainFrame::SetupExternalChapters()
         return;
     }
 
-    CPath cp(fn);
+    CLongPath cp(fn);
     if (!cp.RenameExtension(_T(".xchp")) || !cp.FileExists()) {
         return;
     }
@@ -15541,7 +15566,7 @@ void CMainFrame::SetupCueChapters(CString cuefn) {
         }
     }
     else {
-        CPath basefilepath(cuefn);
+        CLongPath basefilepath(cuefn);
         basefilepath.RemoveFileSpec();
         basefilepath.AddBackslash();
         base = basefilepath.m_strPath;
@@ -16519,7 +16544,7 @@ void CMainFrame::OpenSetupWindowTitle(bool reset /*= false*/)
                 if (m_pDVDI && SUCCEEDED(m_pDVDI->GetDVDDirectory(path.GetBufferSetLength(MAX_PATH), MAX_PATH, &len)) && len) {
                     path.ReleaseBuffer();
                     if (path.Find(_T("\\VIDEO_TS")) == 2) {
-                        title.AppendFormat(_T(" - %s"), GetDriveLabel(CPath(path)).GetString());
+                        title.AppendFormat(_T(" - %s"), GetDriveLabel(CLongPath(path)).GetString());
                     }
                 }
             }
@@ -17510,7 +17535,7 @@ bool CMainFrame::WildcardFileSearch(CString searchstr, std::set<CString, CString
     if (h != INVALID_HANDLE_VALUE) {
         CString search_ext = searchstr.Mid(searchstr.ReverseFind('.')).MakeLower();
         bool other_ext = (search_ext != _T(".*"));
-        CStringW curExt = CPath(m_wndPlaylistBar.GetCurFileName()).GetExtension().MakeLower();
+        CStringW curExt = CLongPath(m_wndPlaylistBar.GetCurFileName()).GetExtension().MakeLower();
 
         auto addFile = [&](const CString& fn) {
             results.insert(fn);
@@ -17596,7 +17621,7 @@ bool CMainFrame::SearchInDir(bool bDirForward, bool bLoop /*= false*/)
     // even if it's of an unknown format.
     auto current = filelist.insert(filename).first;
 
-    if (filelist.size() < 2 && CPath(filename).FileExists()) {
+    if (filelist.size() < 2 && CLongPath(filename).FileExists()) {
         return false;
     }
 
@@ -19328,7 +19353,7 @@ bool CMainFrame::LoadSubtitle(CString fn, SubtitleInput* pSubInput /*= nullptr*/
         videoName = m_wndPlaylistBar.GetCurFileName();
     }
 
-    CString ext = CPath(fn).GetExtension().MakeLower();
+    CString ext = CLongPath(fn).GetExtension().MakeLower();
 
     if (!pSubStream && (ext == _T(".idx") || !bAutoLoad && ext == _T(".sub"))) {
         CAutoPtr<CVobSubFile> pVSF(DEBUG_NEW CVobSubFile(&m_csSubLock));
@@ -20688,7 +20713,7 @@ void CMainFrame::ShowOptions(int idPage/* = 0*/)
     }
 
     // show warning when INI file is read-only
-    CPath iniPath = AfxGetMyApp()->GetIniPath();
+    CLongPath iniPath = AfxGetMyApp()->GetIniPath();
     if (PathUtils::Exists(iniPath)) {
         HANDLE hFile = CreateFile(iniPath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
         if (hFile == INVALID_HANDLE_VALUE) {
@@ -20780,6 +20805,13 @@ bool CMainFrame::CanPreviewUse() {
 void CMainFrame::OpenCurPlaylistItem(REFERENCE_TIME rtStart, bool reopen /* = false */, ABRepeat abRepeat /* = ABRepeat() */)
 {
     if (IsPlaylistEmpty()) {
+        // Nothing was opened, so there is no failure to report either. A
+        // headless run has to be told that it is over.
+        if (AfxGetAppSettings().nCLSwitches & CLSW_THUMBNAILS) {
+            AfxGetAppSettings().nCLSwitches &= ~CLSW_THUMBNAILS;
+            AfxGetMyApp()->ReportCmdLineError(_T("nothing to open"));
+            PostMessage(WM_CLOSE);
+        }
         return;
     }
 
@@ -21406,7 +21438,7 @@ void CMainFrame::CloseMediaInternal(bool bNextIsQueued/* = false*/, bool bPendin
                             if (!lastOpenFile.IsEmpty() && !PathUtils::IsURL(lastOpenFile)) {
                                 // check file existance, this should spin up hdd
                                 ULONGLONG tc1 = GetTickCount64();
-                                CPath path = CPath(lastOpenFile);
+                                CLongPath path = CLongPath(lastOpenFile);
                                 bool exists = path.FileExists();
                                 ULONGLONG tc2 = GetTickCount64();
                                 if (tc2 - tc1 >= 500) {
@@ -21606,7 +21638,7 @@ void CMainFrame::CloseMediaInternal(bool bNextIsQueued/* = false*/, bool bPendin
                         if (!lastOpenFile.IsEmpty() && !PathUtils::IsURL(lastOpenFile)) {
                             // check file existance, this should spin up hdd
                             ULONGLONG tc1 = GetTickCount64();
-                            CPath path = CPath(lastOpenFile);
+                            CLongPath path = CLongPath(lastOpenFile);
                             bool exists = path.FileExists();
                             ULONGLONG tc2 = GetTickCount64();
                             if (tc2 - tc1 >= 500) {
@@ -24136,7 +24168,7 @@ void CMainFrame::UpdateControlState(UpdateControlTarget target)
                 CString filename_no_ext;
                 CString filedir;
                 if (!PathUtils::IsURL(filename)) {
-                    CPath path = CPath(filename);
+                    CLongPath path = CLongPath(filename);
                     if (path.FileExists()) {
                         path.RemoveExtension();
                         filename_no_ext = path.m_strPath;
@@ -24156,7 +24188,7 @@ void CMainFrame::UpdateControlState(UpdateControlTarget target)
                     m_currentCoverAuthor = author;
                 } else {
                     CPlaylistItem pli;
-                    if (m_wndPlaylistBar.GetCur(pli) && !pli.m_cover.IsEmpty() && CPath(pli.m_cover).FileExists()) {
+                    if (m_wndPlaylistBar.GetCur(pli) && !pli.m_cover.IsEmpty() && CLongPath(pli.m_cover).FileExists()) {
                         LoadArtToViews(pli.m_cover);
                     } else if (PathUtils::IsURL(filename)) {
                         ClearArtFromViews();
@@ -24288,13 +24320,13 @@ bool CMainFrame::OpenBD(CString Path)
 
     m_LastOpenBDPath = Path;
 
-    CString ext = CPath(Path).GetExtension();
+    CString ext = CLongPath(Path).GetExtension();
     ext.MakeLower();
 
-    if ((CPath(Path).IsDirectory() && Path.Find(_T("\\BDMV"))) || CPath(Path + _T("\\BDMV")).IsDirectory() || (!ext.IsEmpty() && ext == _T(".bdmv"))) {
+    if ((CLongPath(Path).IsDirectory() && Path.Find(_T("\\BDMV"))) || CLongPath(Path + _T("\\BDMV")).IsDirectory() || (!ext.IsEmpty() && ext == _T(".bdmv"))) {
         if (!ext.IsEmpty() && ext == _T(".bdmv")) {
             Path.Replace(_T("\\BDMV\\"), _T("\\"));
-            CPath _Path(Path);
+            CLongPath _Path(Path);
             _Path.RemoveFileSpec();
             Path = CString(_Path);
         } else if (Path.Find(_T("\\BDMV"))) {
@@ -25279,7 +25311,7 @@ void CMainFrame::MediaTransportControlSetMedia() {
                     CString filename_no_ext;
                     CString filedir;
                     if (!PathUtils::IsURL(filename)) {
-                        CPath path = CPath(filename);
+                        CLongPath path = CLongPath(filename);
                         if (path.FileExists()) {
                             path.RemoveExtension();
                             filename_no_ext = path.m_strPath;
