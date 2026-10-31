@@ -1,5 +1,5 @@
 diff --git a/src/thirdparty/LAVFilters/genversion.cmd b/src/thirdparty/LAVFilters/genversion.cmd
-index 98c9f16..b8a6f78 100644
+index 98c9f16..19f8405 100644
 --- a/src/thirdparty/LAVFilters/genversion.cmd
 +++ b/src/thirdparty/LAVFilters/genversion.cmd
 @@ -13,28 +13,31 @@ SET "LAVCOMMON=%~dp0src\common"
@@ -27,9 +27,10 @@ index 98c9f16..b8a6f78 100644
 +"%GITEXE%" rev-parse --git-dir >NUL 2>&1 || (ECHO genversion: not a git repository, using build number 0 & GOTO Write)
  
  SET "BASE="
- REM (the "=" of --format must be inside quotes: FOR /F would otherwise split the command there)
+-REM (the "=" of --format must be inside quotes: FOR /F would otherwise split the command there)
 -FOR /F "usebackq delims=" %%H IN (`git log --grep="\[MPC-HC\] Use our own ffmpeg clone repository\." "--format=%%H"`) DO IF NOT DEFINED BASE SET "BASE=%%H"
-+FOR /F "usebackq delims=" %%H IN (`""%GITEXE%" log --grep="\[MPC-HC\] Use our own ffmpeg clone repository\." "--format=%%H""`) DO IF NOT DEFINED BASE SET "BASE=%%H"
++REM rev-list emits full commit hashes without a --format argument (FOR /F splits unquoted "=").
++FOR /F "usebackq delims=" %%H IN (`""%GITEXE%" rev-list --grep "\[MPC-HC\] Use our own ffmpeg clone repository\." HEAD"`) DO IF NOT DEFINED BASE SET "BASE=%%H"
  IF NOT DEFINED BASE (
    ECHO genversion: base commit not found, using build number 0
    GOTO Write
