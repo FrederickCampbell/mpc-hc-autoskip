@@ -128,6 +128,20 @@ try {
         Write-Text $path 'test resource'
     }
     & (Join-Path $PSScriptRoot 'Verify-Package.ps1') -Path $stage
+    Write-Host 'Testing complete ZIP creation, archive entries, and the download checksum...'
+    $packageRepo = Join-Path $temp 'package repo'
+    New-Item (Join-Path $packageRepo 'bin') -ItemType Directory -Force | Out-Null
+    Copy-Item $stage (Join-Path $packageRepo 'bin/mpc-hc_x64') -Recurse
+    Copy-Item (Join-Path $stage 'COPYING.txt') $packageRepo
+    foreach ($kind in @('dx9', 'dx11')) {
+        $shaderDir = Join-Path $packageRepo "src/mpc-hc/res/shaders/$kind"
+        New-Item $shaderDir -ItemType Directory -Force | Out-Null
+        Write-Text (Join-Path $shaderDir 'test.hlsl') 'test shader'
+    }
+    & (Join-Path $PSScriptRoot 'Package-X64.ps1') -RepoRoot $packageRepo -UpstreamSha ('a' * 40) -CandidateSha ('b' * 40) -OutputPath (Join-Path $temp 'package-output.txt')
+    $zip = Join-Path $packageRepo 'MPC-HC-AutoSkip-x64.zip'
+    $digest = (Get-FileHash -LiteralPath $zip).Hash.ToLowerInvariant()
+    Assert-True ((Get-Content -LiteralPath "$zip.sha256" -Raw).StartsWith($digest)) 'Package checksum does not match the actual ZIP.'
     $pe[0x44] = 0x4c; $pe[0x45] = 0x01
     [IO.File]::WriteAllBytes((Join-Path $stage 'mpc-hc64.exe'), $pe)
     Assert-Throws { & (Join-Path $PSScriptRoot 'Verify-Package.ps1') -Path $stage } 'x64 PE'
