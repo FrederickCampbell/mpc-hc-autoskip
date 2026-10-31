@@ -1,0 +1,52 @@
+diff --git a/src/thirdparty/LAVFilters/genversion.cmd b/src/thirdparty/LAVFilters/genversion.cmd
+index 98c9f16..19f8405 100644
+--- a/src/thirdparty/LAVFilters/genversion.cmd
++++ b/src/thirdparty/LAVFilters/genversion.cmd
+@@ -13,28 +13,31 @@ SET "LAVCOMMON=%~dp0src\common"
+ PUSHD "%LAVCOMMON%" || (ECHO genversion: cannot find "%LAVCOMMON%" & EXIT /B 1)
+ 
+ REM git: from PATH, else from MPCHC_GIT (build.user.bat), else the default Git for Windows location.
+-REM Its directory goes on PATH so that it can be called unquoted inside FOR /F.
++REM AutoSkip CI fix: do not expand or extend PATH here. Hosted runners can be
++REM close to cmd's 8191-character limit, even on an IF branch that is not taken.
++REM Invoke the resolved executable directly; the extra quotes in FOR /F protect
++REM paths containing spaces when its child cmd strips the outer quote pair.
+ SET "GITEXE="
+ FOR %%G IN (git.exe) DO SET "GITEXE=%%~$PATH:G"
+-IF NOT DEFINED GITEXE IF DEFINED MPCHC_GIT IF EXIST "%MPCHC_GIT%\cmd\git.exe" SET "PATH=%MPCHC_GIT%\cmd;%PATH%" & SET "GITEXE=%MPCHC_GIT%\cmd\git.exe"
+-IF NOT DEFINED GITEXE IF EXIST "C:\Program Files\Git\cmd\git.exe" SET "PATH=C:\Program Files\Git\cmd;%PATH%" & SET "GITEXE=C:\Program Files\Git\cmd\git.exe"
++IF NOT DEFINED GITEXE IF DEFINED MPCHC_GIT IF EXIST "%MPCHC_GIT%\cmd\git.exe" SET "GITEXE=%MPCHC_GIT%\cmd\git.exe"
++IF NOT DEFINED GITEXE IF EXIST "C:\Program Files\Git\cmd\git.exe" SET "GITEXE=C:\Program Files\Git\cmd\git.exe"
+ 
+ SET "VER=0"
+ IF NOT DEFINED GITEXE (
+   ECHO genversion: git not found, using build number 0
+   GOTO Write
+ )
+-git rev-parse --git-dir >NUL 2>&1 || (ECHO genversion: not a git repository, using build number 0 & GOTO Write)
++"%GITEXE%" rev-parse --git-dir >NUL 2>&1 || (ECHO genversion: not a git repository, using build number 0 & GOTO Write)
+ 
+ SET "BASE="
+-REM (the "=" of --format must be inside quotes: FOR /F would otherwise split the command there)
+-FOR /F "usebackq delims=" %%H IN (`git log --grep="\[MPC-HC\] Use our own ffmpeg clone repository\." "--format=%%H"`) DO IF NOT DEFINED BASE SET "BASE=%%H"
++REM rev-list emits full commit hashes without a --format argument (FOR /F splits unquoted "=").
++FOR /F "usebackq delims=" %%H IN (`""%GITEXE%" rev-list --grep "\[MPC-HC\] Use our own ffmpeg clone repository\." HEAD"`) DO IF NOT DEFINED BASE SET "BASE=%%H"
+ IF NOT DEFINED BASE (
+   ECHO genversion: base commit not found, using build number 0
+   GOTO Write
+ )
+ SET "DESCRIBE="
+-FOR /F "usebackq delims=" %%D IN (`git describe --long %BASE%~1`) DO SET "DESCRIBE=%%D"
++FOR /F "usebackq delims=" %%D IN (`""%GITEXE%" describe --long %BASE%~1"`) DO SET "DESCRIBE=%%D"
+ IF NOT DEFINED DESCRIBE (
+   ECHO genversion: git describe failed, using build number 0
+   GOTO Write
+@@ -43,7 +46,7 @@ REM DESCRIBE is <tag>-<n>-g<hash>; LAV's tags carry no dash, so <n> is the secon
+ FOR /F "tokens=2 delims=-" %%N IN ("%DESCRIBE%") DO SET "VER=%%N"
+ SET "HASH=%DESCRIBE:*-g=%"
+ ECHO genversion: describe %DESCRIBE%, build %VER%, hash %HASH%
+-git diff-index --quiet HEAD || ECHO genversion: local modifications found
++"%GITEXE%" diff-index --quiet HEAD || ECHO genversion: local modifications found
+ 
+ :Write
+ SET "LINE=#define LAV_VERSION_BUILD %VER%"

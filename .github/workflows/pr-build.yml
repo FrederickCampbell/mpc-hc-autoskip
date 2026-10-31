@@ -8,7 +8,21 @@ permissions:
   contents: read
 
 jobs:
+  lav-version:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check LAV version generation with a long PATH
+        shell: pwsh
+        run: |
+          $generator = Join-Path $env:RUNNER_TEMP 'upstream-genversion.cmd'
+          Invoke-WebRequest 'https://raw.githubusercontent.com/clsid2/mpc-hc/354e120c476e7e8abb796c4a5d50154f0ec17e7b/src/thirdparty/LAVFilters/genversion.cmd' -OutFile $generator
+          ./.autoskip/Test-LavVersion.ps1 -Generator $generator
+
   x64-build:
+    needs: lav-version
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
@@ -16,6 +30,20 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - name: Merge the upstream revision from the failed build
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags https://github.com/clsid2/mpc-hc.git 354e120c476e7e8abb796c4a5d50154f0ec17e7b
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the upstream build candidate.' }
+          git merge --no-edit FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not merge the upstream build candidate.' }
+          git submodule sync --recursive
+          if ($LASTEXITCODE -ne 0) { throw 'Could not sync candidate submodules.' }
+          git submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw 'Could not update candidate submodules.' }
 
       - name: Verify AutoSkip source markers
         shell: pwsh
