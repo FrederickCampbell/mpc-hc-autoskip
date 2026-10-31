@@ -108,6 +108,7 @@ enum {
     WM_MPC_OPENCURPLAYLIST,
     WM_MPC_CMDLINE, // deliberately outside the range purged while closing: a command line must not be dropped
     WM_MPC_RUN_DEFERRED, // run an open/close/OnClose recorded while a CMainFrame::CDeferredActionScope holder was on the stack
+    WM_MPC_UI_REQUEST, // sent (never posted) by the web server's thread with a CMainFrame::UIRequest to run here
     WM_LAV_PROPPAGE_CALLBACK,
     WM_MPCVR_SWITCH_FULLSCREEN = WM_APP + 4096,
 };
@@ -258,7 +259,10 @@ public:
     // (/dvbscan, /thumbnails), which have no other way to tell their caller
     // that the job did not get done.
     int m_nExitCode = 0;
+    // set by Reset in Options: ExitInstance starts a new instance with /reset
+    bool m_bRelaunchWithReset = false;
     bool m_bThemeLoaded;
+    bool m_bNativeMenus;
     CRenderersData m_Renderers;
     CString     m_strVersion;
     CString     m_AudioRendererDisplayName_CL;
@@ -307,6 +311,7 @@ bool WriteRegistryString(HKEY hKeyRoot, LPCWSTR subKey, LPCWSTR valueName, const
 
 #define AppIsThemeLoaded() (static_cast<CMPlayerCApp*>(AfxGetApp())->m_bThemeLoaded)
 #define AppNeedsThemedControls() (AppIsThemeLoaded() && CMPCTheme::drawThemedControls)
+#define AppNeedsThemedMenus() (AppIsThemeLoaded() && !static_cast<CMPlayerCApp*>(AfxGetApp())->m_bNativeMenus)
 
 #define AfxGetMainFrame()   static_cast<CMainFrame*>(AfxGetMainWnd())
 #define AfxFindMainFrame()  dynamic_cast<CMainFrame*>(AfxGetMainWnd())

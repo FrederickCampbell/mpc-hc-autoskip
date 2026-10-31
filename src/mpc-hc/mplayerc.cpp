@@ -656,6 +656,7 @@ CMPlayerCApp::CMPlayerCApp()
     , m_bDelayingIdle(false)
     , m_fClosingState(false)
     , m_bThemeLoaded(false)
+    , m_bNativeMenus(false)
 {
     m_strVersion = FileVersionInfo::GetFileVersionStr(PathUtils::GetProgramPath(true));
 
@@ -1865,8 +1866,7 @@ static CMPCThemeScrollBarRenderer* GetScrollBarRenderer(HWND hWnd) {
 
     // Themed scrollbars not available in classic mode = !IsThemeActive()
     if (pWnd && sbrIsThemeActive) {
-        static BOOL cachedThemedControls = AppNeedsThemedControls();
-        if (cachedThemedControls) {
+        if (AppNeedsThemedControls()) { //not cached: the theme can change while the player runs
             CMPCThemeScrollBarRenderer* pRenderer = DYNAMIC_DOWNCAST(CMPCThemePlayerListCtrl, pWnd);
             if (pRenderer) {
                 return pRenderer;
@@ -2380,6 +2380,7 @@ BOOL CMPlayerCApp::InitInstance()
     m_s->MigrateSettings(); // migrate old settings
     m_s->LoadSettings();    // read settings
     m_s->UpdateSettings();  // update settings
+    CMPCThemeUtil::applyNativeMenuMode();
 
     #if !defined(_DEBUG) && USE_DRDUMP_CRASH_REPORTER
     if (m_s->bEnableCrashReporter) {
@@ -2730,6 +2731,11 @@ int CMPlayerCApp::ExitInstance()
         m_s = nullptr;
     }
 
+    if (m_bRelaunchWithReset) {
+        // the frame is gone, so the new instance does not have to wait for it
+        ShellExecute(nullptr, _T("open"), PathUtils::GetProgramPath(true), _T("/reset"), nullptr, SW_SHOWNORMAL);
+    }
+
     CMPCPngImage::CleanUp();
 
     MH_Uninitialize();
@@ -2775,7 +2781,7 @@ void CMPlayerCApp::OnAppAbout()
 void CMPlayerCApp::SetClosingState()
 {
     m_fClosingState = true;
-#if USE_DRDUMP_CRASH_REPORTER & (MPC_VERSION_PATCH < 2) & (MPC_VERSION_REV < 10)
+#if USE_DRDUMP_CRASH_REPORTER & (MPC_VERSION_PATCH < 2) & (MPC_VERSION_REV < 10) & 0
     DisableCrashReporter();
 #endif
 }

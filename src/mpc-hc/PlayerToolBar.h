@@ -80,6 +80,7 @@ private:
     };
 
     static std::map<WORD, svgButtonInfo> supportedSvgButtons;
+    static int FirstMovableButtonIndex(const std::vector<int>& buttons, int layoutRevision);
     static bool IsValidButtonLayout(const std::vector<int>& buttons, int layoutRevision);
 public:
     CPlayerToolBar(CMainFrame* pMainFrame);
@@ -147,6 +148,8 @@ protected:
     afx_msg BOOL OnMenuButton(UINT nID);
     afx_msg void OnCustomDraw(NMHDR* pNMHDR, LRESULT* pResult);
     afx_msg void OnSize(UINT nType, int cx, int cy);
+    afx_msg LRESULT OnMPCThemeChanged(WPARAM wParam, LPARAM lParam);
+    void RegisterThemedToolTipTools();
     afx_msg void OnInitialUpdate();
     afx_msg BOOL OnVolumeMute(UINT nID);
     afx_msg void OnUpdateVolumeMute(CCmdUI* pCmdUI);
