@@ -249,6 +249,7 @@ Get-Content -LiteralPath build.user.bat | ForEach-Object { Write-Host "  $_" -Fo
 # a direct HarfBuzz -> FreeType dependency. The normal build uses /maxcpucount,
 # so HarfBuzz can race FreeType and fail with LNK1181.
 $repoRoot = [System.IO.Directory]::GetParent($PSScriptRoot).FullName
+& (Join-Path $PSScriptRoot 'Apply-LavVersionFix.ps1') -RepoRoot $repoRoot
 $freeTypeLib = [System.IO.Path]::Combine($repoRoot, 'bin', 'lib', 'Release_x64', 'freetype2.lib')
 $vsDevCmd = [System.IO.Path]::Combine($vs, 'Common7', 'Tools', 'VsDevCmd.bat')
 
