@@ -40,6 +40,9 @@ function Replace-Once {
     if ($idx -lt 0) {
         throw "Patch anchor not found in $RelativePath. Upstream likely changed; no source files have been written."
     }
+    if ($text.IndexOf($needleNative, $idx + $needleNative.Length, [StringComparison]::Ordinal) -ge 0) {
+        throw "Ambiguous patch anchor in $RelativePath; no source files have been written."
+    }
 
     $script:PendingFiles[$RelativePath] = $text.Substring(0, $idx) + $replacementNative + $text.Substring($idx + $needleNative.Length)
     Write-Host "Prepared patch for $RelativePath" -ForegroundColor DarkGreen
@@ -51,8 +54,9 @@ if (-not (Test-Path -LiteralPath $mainFrmCpp)) {
 }
 
 if ([System.IO.File]::ReadAllText($mainFrmCpp).Contains('MPC-HC AutoSkip: chapter matcher')) {
+    & (Join-Path $PSScriptRoot 'Verify-AutoSkipPatch.ps1') -RepoRoot $RepoRoot
     Write-Host 'AutoSkip patch is already present; nothing to do.' -ForegroundColor Yellow
-    exit 0
+    return
 }
 
 # 1) Persistent setting names.

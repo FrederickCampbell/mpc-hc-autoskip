@@ -1,0 +1,2 @@
+# Pin the translation dependency instead of upgrading it on every build.
+polib==1.2.0 --hash=sha256:1c77ee1b81feb31df9bca258cbc58db1bbb32d10214b173882452c73af06d62d

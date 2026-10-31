@@ -4,6 +4,9 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+$repoRoot = [IO.Directory]::GetParent($PSScriptRoot).FullName
+. (Join-Path $PSScriptRoot 'Build-Path.ps1')
+$env:Path = Get-UniqueBuildPath @($env:Path)
 
 function Assert-LastExitCode {
     param([Parameter(Mandatory)] [string]$Message)
@@ -16,9 +19,9 @@ $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.e
 if (-not (Test-Path -LiteralPath $vswhere)) {
     throw 'vswhere.exe is missing. Install Visual Studio C++ build tools with ATL/MFC.'
 }
-$vs = (& $vswhere -latest -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.ATLMFC Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+$vs = (& $vswhere -latest -version '[17.0,18.0)' -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.ATLMFC Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
 if (-not $vs) {
-    throw 'Visual Studio C++ ATL/MFC build tools are missing.'
+    throw 'Visual Studio 2022 C++ ATL/MFC build tools are missing (the build uses the v143 toolset).'
 }
 Write-Host "Visual Studio: $vs"
 
@@ -30,7 +33,11 @@ if (-not (Test-Path -LiteralPath $sdkRoot)) {
     throw "Windows 10/11 SDK library root is missing: $sdkRoot"
 }
 $sdk = Get-ChildItem -LiteralPath $sdkRoot -Directory | Where-Object {
-    $_.Name -match '^\d+\.\d+\.\d+\.\d+$' -and (Test-Path (Join-Path $_.FullName 'um\x64'))
+    $_.Name -match '^\d+\.\d+\.\d+\.\d+$' -and
+    (Test-Path (Join-Path $_.FullName 'um\x64\kernel32.lib')) -and
+    (Test-Path (Join-Path $_.FullName 'ucrt\x64\ucrt.lib')) -and
+    (Test-Path (Join-Path (Split-Path $sdkRoot -Parent) "Include\$($_.Name)\um\Windows.h")) -and
+    (Test-Path (Join-Path (Split-Path $sdkRoot -Parent) "Include\$($_.Name)\ucrt\stdlib.h"))
 } | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
 if (-not $sdk) {
     throw 'No usable x64 Windows SDK was found.'
@@ -96,7 +103,7 @@ if ($needsMpcToolchain) {
 
         $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
         $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
-        $env:Path = "$machinePath;$userPath;$env:Path"
+        $env:Path = Get-UniqueBuildPath @($env:Path, $machinePath, $userPath)
 
         $sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
     }
@@ -108,6 +115,7 @@ if ($needsMpcToolchain) {
     Invoke-WebRequest `
         -Uri $toolchainUrl `
         -OutFile $archive `
+        -MaximumRetryCount 3 -RetryIntervalSec 5 -TimeoutSec 120 `
         -UseBasicParsing
 
     New-Item $mingw64 -ItemType Directory -Force | Out-Null
@@ -161,7 +169,7 @@ if (-not $nasm) {
         throw 'NASM is missing and Chocolatey is unavailable.'
     }
 
-    choco install nasm -y --no-progress
+    choco install nasm --version=3.2.0 -y --no-progress
     Assert-LastExitCode 'Chocolatey could not install NASM'
 
     # Chocolatey's NASM installer places the x64 build here.
@@ -169,7 +177,7 @@ if (-not $nasm) {
 
     if (Test-Path -LiteralPath $nasmExe) {
         $nasmDir = Split-Path $nasmExe -Parent
-        $env:Path = "$nasmDir;$env:Path"
+        $env:Path = Get-UniqueBuildPath @($nasmDir, $env:Path)
         $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
     }
 }
@@ -178,7 +186,7 @@ if (-not $nasm) {
 if (-not $nasm) {
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = "$machinePath;$userPath;$env:Path"
+    $env:Path = Get-UniqueBuildPath @($env:Path, $machinePath, $userPath)
     $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
 }
 
@@ -198,7 +206,7 @@ if (-not $nasm) {
             Select-Object -First 1
 
         if ($candidate) {
-            $env:Path = "$($candidate.DirectoryName);$env:Path"
+            $env:Path = Get-UniqueBuildPath @($candidate.DirectoryName, $env:Path)
             $nasm = Get-Command nasm.exe -ErrorAction SilentlyContinue
             if ($nasm) { break }
         }
@@ -218,7 +226,7 @@ Assert-LastExitCode 'NASM was located but could not execute'
 if (-not (Get-Command python.exe -ErrorAction SilentlyContinue)) {
     throw 'Python 3 is required for MPC-HC translation resources.'
 }
-python -m pip install --disable-pip-version-check --quiet --upgrade polib
+python -m pip install --disable-pip-version-check --quiet --only-binary=:all: --require-hashes -r (Join-Path $PSScriptRoot 'requirements-build.txt')
 Assert-LastExitCode 'pip could not install polib'
 
 $pythonRoot = Split-Path (Get-Command python.exe).Source -Parent
@@ -239,16 +247,15 @@ SET "MPCHC_GIT=$gitRoot"
 SET "MPCHC_PYTHON=$pythonRoot"
 SET "MPCHC_VS_PATH=$vs"
 SET "MPCHC_WINSDK_VER=$sdkVersion"
-"@ | Set-Content -LiteralPath build.user.bat -Encoding ascii
+"@ | Set-Content -LiteralPath (Join-Path $repoRoot 'build.user.bat') -Encoding ascii
 
 Write-Host 'Generated build.user.bat:' -ForegroundColor DarkGray
-Get-Content -LiteralPath build.user.bat | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+Get-Content -LiteralPath (Join-Path $repoRoot 'build.user.bat') | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
 
 # AutoSkip CI compatibility: prebuild FreeType before the parallel MPC-HC solution build.
 # HarfBuzz consumes freetype2.lib, but the solution does not currently express
 # a direct HarfBuzz -> FreeType dependency. The normal build uses /maxcpucount,
 # so HarfBuzz can race FreeType and fail with LNK1181.
-$repoRoot = [System.IO.Directory]::GetParent($PSScriptRoot).FullName
 & (Join-Path $PSScriptRoot 'Apply-LavVersionFix.ps1') -RepoRoot $repoRoot
 $freeTypeLib = [System.IO.Path]::Combine($repoRoot, 'bin', 'lib', 'Release_x64', 'freetype2.lib')
 $vsDevCmd = [System.IO.Path]::Combine($vs, 'Common7', 'Tools', 'VsDevCmd.bat')
@@ -260,7 +267,7 @@ if (-not [System.IO.File]::Exists($vsDevCmd)) {
 Write-Host 'Prebuilding FreeType x64 Release for HarfBuzz...' -ForegroundColor Cyan
 
 $freeTypeProject = [System.IO.Path]::Combine($repoRoot, 'src', 'thirdparty', 'freetype2', 'freetype2.vcxproj')
-$solutionDir = $repoRoot.TrimEnd('\') + '\'
+$solutionDir = $repoRoot.Replace('\', '/').TrimEnd('/') + '/'
 
 if (-not [System.IO.File]::Exists($freeTypeProject)) {
     throw "FreeType project is missing: $freeTypeProject"
@@ -269,7 +276,7 @@ if (-not [System.IO.File]::Exists($freeTypeProject)) {
 # Build the FreeType vcxproj directly. Using /target:freetype2 against mpc-hc.sln
 # is invalid here because MSBuild forwards that target name into the projects.
 # SolutionDir is supplied explicitly because src\common.props uses it for OutDir.
-$prebuildCommand = "call `"$vsDevCmd`" -no_logo -arch=amd64 -winsdk=$sdkVersion && MSBuild.exe `"$freeTypeProject`" /nologo /consoleloggerparameters:Verbosity=minimal /maxcpucount:1 /nodeReuse:false /target:Build /property:Configuration=Release /property:Platform=x64 /property:SolutionDir=$solutionDir /property:MPCHC_WINSDK_VER=$sdkVersion"
+$prebuildCommand = "call `"$vsDevCmd`" -no_logo -arch=amd64 -winsdk=$sdkVersion && MSBuild.exe `"$freeTypeProject`" /nologo /consoleloggerparameters:Verbosity=minimal /maxcpucount:1 /nodeReuse:false /target:Build /property:Configuration=Release /property:Platform=x64 /property:SolutionDir=`"$solutionDir`" /property:MPCHC_WINSDK_VER=$sdkVersion"
 
 $oldPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
@@ -297,14 +304,16 @@ Write-Host "FreeType ready: $freeTypeLib" -ForegroundColor Green
 Write-Host 'Building MPC-HC x64 Release...' -ForegroundColor Cyan
 $oldPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
-cmd /c "build.bat x64 MPCHC Release Nocolors Silent"
+$logDirectory = Join-Path $repoRoot 'bin/logs'
+New-Item $logDirectory -ItemType Directory -Force | Out-Null
+& $env:ComSpec /d /s /c "call `"$repoRoot\build.bat`" x64 MPCHC Release Nocolors Silent" 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'autoskip-build.log')
 $buildExit = $LASTEXITCODE
 $ErrorActionPreference = $oldPreference
 
 if ($buildExit -ne 0) {
     Write-Host "MPC-HC build failed with exit code $buildExit." -ForegroundColor Red
-    if (Test-Path -LiteralPath 'bin\logs') {
-        Get-ChildItem 'bin\logs' -File | ForEach-Object {
+    if (Test-Path -LiteralPath (Join-Path $repoRoot 'bin\logs')) {
+        Get-ChildItem (Join-Path $repoRoot 'bin\logs') -File | Where-Object { $_.Name -match 'errors|autoskip-build' } | ForEach-Object {
             Write-Host "===== $($_.Name) =====" -ForegroundColor Yellow
             Get-Content $_.FullName -Tail 200
         }
@@ -312,7 +321,7 @@ if ($buildExit -ne 0) {
     exit $buildExit
 }
 
-$exe = Get-ChildItem 'bin\mpc-hc_x64' -Filter 'mpc-hc*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+$exe = Get-ChildItem (Join-Path $repoRoot 'bin\mpc-hc_x64') -Filter 'mpc-hc64.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $exe) {
     throw 'Build reported success but no MPC-HC x64 executable was produced.'
 }
@@ -322,7 +331,7 @@ if (-not $exe) {
 $runtimeDir = Split-Path $exe.FullName -Parent
 
 foreach ($dll in @('D3DCompiler_47.dll', 'D3DX9_43.dll')) {
-    $source = Join-Path 'distrib\x64' $dll
+    $source = Join-Path (Join-Path $repoRoot 'distrib\x64') $dll
 
     if (-not (Test-Path -LiteralPath $source)) {
         throw "Required MPC-HC runtime file is missing: $source"
@@ -343,6 +352,7 @@ New-Item $mpcvrDir -ItemType Directory -Force | Out-Null
 Invoke-WebRequest `
     -Uri $mpcvrUrl `
     -OutFile $mpcvrFile `
+    -MaximumRetryCount 3 -RetryIntervalSec 5 -TimeoutSec 120 `
     -UseBasicParsing
 
 if (-not (Test-Path -LiteralPath $mpcvrFile)) {
