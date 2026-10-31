@@ -54,7 +54,7 @@ The bootstrap opens this repository in VS Code and installs three ready-made **T
 
 
 - `scripts/Update-Now.ps1` — trigger the upstream sync/build immediately and watch it.
-- `scripts/Install-Latest.ps1` — download the newest successful release and install/overlay it in `%LOCALAPPDATA%\Programs\MPC-HC-AutoSkip` by default.
+- `scripts/Install-Latest.ps1` — download `autoskip-latest`, verify the ZIP digest and package before replacing files, and install/overlay it in `%LOCALAPPDATA%\Programs\MPC-HC-AutoSkip` while preserving portable settings.
 - `scripts/Watch-Build.ps1` — watch the most recent build.
 - `.autoskip/Build-X64.ps1` — shared Windows build harness used by both upstream-sync CI and pull-request CI.
 

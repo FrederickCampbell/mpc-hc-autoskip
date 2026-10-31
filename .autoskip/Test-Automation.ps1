@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('autoskip-tests-' + [guid]::NewGuid())
 $sourceRoot = [IO.Directory]::GetParent($PSScriptRoot).FullName
+$originalTemp = $env:TEMP
 $settingsPath = 'src/mpc-hc/PPageAdvanced.cpp'
 $baseText = "void InitSettings()`n{`n    addBoolItem(LOOP_FOLDER_NEXT_FILE, old_label, false, old_value, old_help);`n    addBoolItem(NEXT_FILE_SORT_BY_DATE, next_label, false, next_value, next_help);`n}`n"
 $ownLines = "    addBoolItem(AUTOSKIP_CHAPTERS, L`"AutoSkipChapters`", true, s.bAutoSkipChapters, L`"help`" );`n    addCStringItem(AUTOSKIP_CHAPTER_PATTERNS, L`"AutoSkipChapterPatterns`", L`"opening;ending`", s.sAutoSkipChapterPatterns, L`"help`" );`n"
@@ -142,6 +143,29 @@ try {
     $zip = Join-Path $packageRepo 'MPC-HC-AutoSkip-x64.zip'
     $digest = (Get-FileHash -LiteralPath $zip).Hash.ToLowerInvariant()
     Assert-True ((Get-Content -LiteralPath "$zip.sha256" -Raw).StartsWith($digest)) 'Package checksum does not match the actual ZIP.'
+    Write-Host 'Testing rolling-release install selection, digest validation, and settings preservation...'
+    $global:AutoSkipInstallerTest = @{ Zip = $zip; Digest = "sha256:$digest" }
+    function gh {
+        param([Parameter(ValueFromRemainingArguments)] [string[]]$Arguments)
+        $global:LASTEXITCODE = 0
+        if ($Arguments[0] -eq 'api') {
+            @{ assets = @(@{ name = 'MPC-HC-AutoSkip-x64.zip'; digest = $global:AutoSkipInstallerTest.Digest }) } | ConvertTo-Json -Depth 4 -Compress
+            return
+        }
+        if ($Arguments[1] -ne 'download' -or $Arguments[2] -ne 'autoskip-latest' -or $Arguments -notcontains 'MPC-HC-AutoSkip-x64.zip') { throw 'Installer requested the wrong rolling release asset.' }
+        $destination = $Arguments[[Array]::IndexOf($Arguments, '--dir') + 1]
+        Copy-Item $global:AutoSkipInstallerTest.Zip $destination
+    }
+    $env:TEMP = $temp
+    $install = Join-Path $temp 'installed player'
+    New-Item $install -ItemType Directory | Out-Null
+    Write-Text (Join-Path $install 'mpc-hc.ini') 'preserve my settings'
+    & (Join-Path $sourceRoot 'scripts/Install-Latest.ps1') -Repo test/repo -InstallDir $install -NoLaunch
+    Assert-True ((Get-Content (Join-Path $install 'mpc-hc.ini') -Raw) -eq 'preserve my settings') 'Installer overwrote portable settings.'
+    $before = (Get-FileHash (Join-Path $install 'mpc-hc64.exe')).Hash
+    $global:AutoSkipInstallerTest.Digest = 'sha256:' + ('0' * 64)
+    Assert-Throws { & (Join-Path $sourceRoot 'scripts/Install-Latest.ps1') -Repo test/repo -InstallDir $install -NoLaunch } 'checksum does not match'
+    Assert-True ((Get-FileHash (Join-Path $install 'mpc-hc64.exe')).Hash -eq $before) 'A checksum failure changed the installed player.'
     $pe[0x44] = 0x4c; $pe[0x45] = 0x01
     [IO.File]::WriteAllBytes((Join-Path $stage 'mpc-hc64.exe'), $pe)
     Assert-Throws { & (Join-Path $PSScriptRoot 'Verify-Package.ps1') -Path $stage } 'x64 PE'
@@ -162,4 +186,8 @@ try {
     Assert-Throws { & (Join-Path $PSScriptRoot 'Apply-AutoSkipPatch.ps1') -RepoRoot $copy } 'MainFrm.cpp.*found 0'
     Write-Host 'Automation regression checks passed.'
 }
-finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+finally {
+    $env:TEMP = $originalTemp
+    Remove-Variable AutoSkipInstallerTest -Scope Global -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+}
