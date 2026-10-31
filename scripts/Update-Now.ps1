@@ -8,7 +8,9 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
 function Get-RepoSlug {
-    $url = (git remote get-url origin).Trim()
+    $url = @(git remote get-url origin)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read the repository origin.' }
+    $url = ($url -join '').Trim()
     if ($url -match 'github\.com[/:](?<slug>[^/]+/[^/]+?)(?:\.git)?$') {
         return $Matches.slug
     }
@@ -16,7 +18,8 @@ function Get-RepoSlug {
 }
 
 $repo = Get-RepoSlug
-$previousRunId = gh run list --repo $repo --workflow 'AutoSync + Build AutoSkip' --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId' 2>$null
+$previousRunId = gh run list --repo $repo --workflow 'AutoSync + Build AutoSkip' --branch autoskip --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId'
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect existing workflow runs.' }
 
 Write-Host "Triggering upstream sync/build for $repo..." -ForegroundColor Cyan
 gh workflow run 'AutoSync + Build AutoSkip' --repo $repo --ref autoskip
@@ -30,7 +33,8 @@ if ($NoWait) {
 $runId = $null
 for ($i = 0; $i -lt 45 -and -not $runId; $i++) {
     Start-Sleep -Seconds 2
-    $candidate = gh run list --repo $repo --workflow 'AutoSync + Build AutoSkip' --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId' 2>$null
+    $candidate = gh run list --repo $repo --workflow 'AutoSync + Build AutoSkip' --branch autoskip --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not locate the triggered workflow; use Watch-Build to reconnect.' }
     if ($candidate -and $candidate -ne $previousRunId) { $runId = $candidate }
 }
 if (-not $runId) { throw 'Could not find the newly triggered GitHub Actions run.' }

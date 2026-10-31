@@ -3,9 +3,7 @@ name: AutoSync + Build AutoSkip
 on:
   workflow_dispatch:
   push:
-    branches:
-      - autoskip
-      - chore/rolling-release-no-artifacts
+    branches: [autoskip]
   schedule:
     - cron: '17 12 * * *'
 
@@ -13,9 +11,10 @@ permissions:
   contents: write
   actions: write
 
+# Serialize publication. A new push must not interrupt an asset/tag update.
 concurrency:
-  group: autoskip-sync-build
-  cancel-in-progress: true
+  group: autoskip-sync-build-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   UPSTREAM_REPO: clsid2/mpc-hc
@@ -23,248 +22,101 @@ env:
 
 jobs:
   sync-build-release:
-    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
+    if: github.ref == 'refs/heads/autoskip' && (github.event_name != 'push' || github.actor != 'github-actions[bot]')
     runs-on: windows-2022
     timeout-minutes: 90
-
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - name: Checkout AutoSkip branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: autoskip
           fetch-depth: 0
 
-      - name: Configure Git
-        shell: pwsh
+      - name: Prepare tested upstream candidate
+        id: sync
         run: |
           git config user.name "github-actions[bot]"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not configure Git identity.' }
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if (-not (git remote | Select-String '^upstream$')) {
-            git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git"
-          }
-          git remote set-url upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git"
-
-      - name: Fetch and merge upstream when needed
-        id: sync
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $false
-          git fetch upstream "${{ env.UPSTREAM_BRANCH }}" --tags
-
-          $upstreamSha = (git rev-parse "upstream/${{ env.UPSTREAM_BRANCH }}").Trim()
-          $upstreamShort = $upstreamSha.Substring(0, 8)
-          "upstream_sha=$upstreamSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "upstream_short=$upstreamShort" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-          git merge-base --is-ancestor $upstreamSha HEAD
-          $alreadyContains = ($LASTEXITCODE -eq 0)
-          $forceBuild = "${{ github.event_name }}" -in @('workflow_dispatch', 'push')
-
-          if ($alreadyContains) {
-            "had_merge=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            if ($forceBuild) {
-              "build_needed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-              Write-Host "Already current with upstream; explicit run requested a rebuild."
-            } else {
-              "build_needed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-              Write-Host "No upstream changes. Nothing to build."
-            }
-            exit 0
-          }
-
-          Write-Host "Merging upstream/${{ env.UPSTREAM_BRANCH }} ($upstreamShort)..."
-          git merge --no-edit "upstream/${{ env.UPSTREAM_BRANCH }}"
-          $mergeExit = $LASTEXITCODE
-
-          if ($mergeExit -ne 0) {
-            $unmerged = @(git diff --name-only --diff-filter=U)
-            $expectedConflict = 'src/mpc-hc/PPageAdvanced.cpp'
-
-            if ($unmerged.Count -eq 1 -and $unmerged[0] -eq $expectedConflict) {
-              Write-Host "Auto-resolving expected AutoSkip settings conflict in $expectedConflict..."
-              git checkout --theirs -- $expectedConflict
-              if ($LASTEXITCODE -ne 0) {
-                throw "Could not check out upstream side of $expectedConflict"
-              }
-
-              $text = [IO.File]::ReadAllText($expectedConflict)
-              $anchor = '    addBoolItem(LOOP_FOLDER_NEXT_FILE, IDS_RS_LOOP_FOLDER_NEXT_FILE, false, s.bLoopFolderOnPlayNextFile, StrRes(IDS_PPAGEADVANCED_LOOP_FOLDER_NEXT_FILE));'
-              $autoSkip = @(
-                '    addBoolItem(AUTOSKIP_CHAPTERS, L"AutoSkipChapters", true, s.bAutoSkipChapters, L"Automatically skip file chapters whose title matches AutoSkipChapterPatterns.");',
-                '    addCStringItem(AUTOSKIP_CHAPTER_PATTERNS, L"AutoSkipChapterPatterns", L"opening;ending;yokoku;preview", s.sAutoSkipChapterPatterns, L"Semicolon-separated, case-insensitive substrings. Example: opening;ending;yokoku;preview");'
-              ) -join "`r`n"
-
-              if (-not $text.Contains($anchor)) {
-                throw "Expected playback-settings anchor was not found in $expectedConflict"
-              }
-              if (-not $text.Contains('addBoolItem(AUTOSKIP_CHAPTERS')) {
-                $text = $text.Replace($anchor, $anchor + "`r`n" + $autoSkip)
-                [IO.File]::WriteAllText($expectedConflict, $text, [Text.UTF8Encoding]::new($false))
-              }
-
-              git add -- $expectedConflict
-              $remaining = @(git diff --name-only --diff-filter=U)
-              if ($remaining.Count -gt 0) {
-                throw "Unresolved merge conflicts remain: $($remaining -join ', ')"
-              }
-
-              git diff --cached --check -- $expectedConflict
-              if ($LASTEXITCODE -ne 0) {
-                throw "Resolved merge introduced whitespace errors in $expectedConflict."
-              }
-
-              git commit --no-edit
-              if ($LASTEXITCODE -ne 0) {
-                throw 'Could not commit the automatically resolved upstream merge.'
-              }
-            } else {
-              "sync_failed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-              "build_needed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-              git status --short
-              throw "Unexpected upstream merge conflict(s): $($unmerged -join ', ')"
-            }
-          }
-
-          "had_merge=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "build_needed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Could not configure Git identity.' }
+          ./.autoskip/Sync-Upstream.ps1 -UpstreamUrl ("https://github.com/{0}.git" -f $env:UPSTREAM_REPO) -UpstreamBranch $env:UPSTREAM_BRANCH -EnsureReleaseCurrent -ForceBuild:($env:GITHUB_EVENT_NAME -in @('workflow_dispatch', 'push'))
 
       - name: Refresh submodules
         if: steps.sync.outputs.build_needed == 'true'
-        shell: pwsh
         run: |
           git submodule sync --recursive
+          if ($LASTEXITCODE -ne 0) { throw 'Could not synchronize submodules.' }
           git submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw 'Could not update submodules.' }
 
-      - name: Verify AutoSkip source markers
+      - name: Verify AutoSkip behavior is wired into the source
         if: steps.sync.outputs.build_needed == 'true'
-        shell: pwsh
         run: ./.autoskip/Verify-AutoSkipPatch.ps1
 
       - name: Build MPC-HC x64
-        id: build
         if: steps.sync.outputs.build_needed == 'true'
-        continue-on-error: true
-        shell: pwsh
         run: ./.autoskip/Build-X64.ps1
 
-      - name: Fail safely when build failed
-        if: steps.build.outcome == 'failure'
-        shell: pwsh
-        run: |
-          Write-Error 'MPC-HC x64 build failed. Build-X64.ps1 already printed the relevant build-log tail above.'
-          exit 1
-
-      - name: Push tested upstream merge
-        if: steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success' && steps.sync.outputs.had_merge == 'true'
-        shell: pwsh
-        run: git push origin HEAD:${{ github.ref_name }}
-
-      - name: Package x64 build
+      - name: Validate and package x64 build
         id: package
-        if: steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success'
-        shell: pwsh
-        run: |
-          $version = (Get-Content '.autoskip\VERSION' -Raw).Trim()
-          $zip = 'MPC-HC-AutoSkip-x64.zip'
+        if: steps.sync.outputs.build_needed == 'true'
+        env:
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+          CANDIDATE_SHA: ${{ steps.sync.outputs.candidate_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: ./.autoskip/Package-X64.ps1 -UpstreamSha $env:UPSTREAM_SHA -CandidateSha $env:CANDIDATE_SHA -RunUrl $env:RUN_URL
 
-          $stage = Join-Path $env:RUNNER_TEMP 'mpc-hc-autoskip-release'
-          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item $stage -ItemType Directory | Out-Null
-          Copy-Item 'bin\mpc-hc_x64\*' $stage -Recurse -Force
+      - name: Push the tested candidate if the branch is still current
+        if: steps.sync.outputs.build_needed == 'true'
+        env:
+          INITIAL_SHA: ${{ steps.sync.outputs.initial_sha }}
+          CANDIDATE_SHA: ${{ steps.sync.outputs.candidate_sha }}
+          HAD_MERGE: ${{ steps.sync.outputs.had_merge }}
+        run: ./.autoskip/Push-TestedCandidate.ps1 -InitialSha $env:INITIAL_SHA -CandidateSha $env:CANDIDATE_SHA -HadMerge:($env:HAD_MERGE -eq 'true')
 
-          $buildOnlyExtensions = @('.pdb', '.lib', '.exp', '.ilk', '.iobj', '.ipdb')
-          Get-ChildItem $stage -Recurse -File | Where-Object {
-            $buildOnlyExtensions -contains $_.Extension.ToLowerInvariant()
-          } | Remove-Item -Force
-
-          New-Item (Join-Path $stage 'Shaders') -ItemType Directory -Force | Out-Null
-          New-Item (Join-Path $stage 'Shaders11') -ItemType Directory -Force | Out-Null
-          Copy-Item 'src\mpc-hc\res\shaders\dx9\*.hlsl' (Join-Path $stage 'Shaders') -Force
-          Copy-Item 'src\mpc-hc\res\shaders\dx11\*.hlsl' (Join-Path $stage 'Shaders11') -Force
-          Copy-Item 'COPYING.txt' $stage -Force
-
-          @"
-          MPC-HC AutoSkip $version
-          Upstream: ${{ env.UPSTREAM_REPO }}@${{ steps.sync.outputs.upstream_sha }}
-          Fork commit: $(git rev-parse HEAD)
-          Build: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          AutoSkip UI:
-          Options > Advanced > Playback
-            AutoSkipChapters = True
-            AutoSkipChapterPatterns = opening;ending;yokoku;preview
-          "@ | Set-Content (Join-Path $stage 'AUTOSKIP-BUILD.txt') -Encoding utf8
-
-          Compress-Archive -Path "$stage\*" -DestinationPath $zip -CompressionLevel Optimal -Force
-          "zip=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Publish rolling GitHub release
-        if: github.ref_name == 'autoskip' && steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success'
-        shell: pwsh
+      - name: Publish verified rolling release
+        id: publish
+        if: steps.sync.outputs.build_needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $false
-          $tag = 'autoskip-latest'
-          $zip = '${{ steps.package.outputs.zip }}'
-          $version = '${{ steps.package.outputs.version }}'
-
-          git tag -f $tag HEAD
-          git push origin "refs/tags/$tag" --force
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Could not update autoskip-latest tag.'
-          }
-
-          $notesPath = Join-Path $env:RUNNER_TEMP 'autoskip-release-notes.md'
-          @"
-          Latest automatic x64 build of MPC-HC with native chapter AutoSkip.
-
-          - AutoSkip version: $version
-          - Upstream: ${{ env.UPSTREAM_REPO }}@${{ steps.sync.outputs.upstream_sha }}
-          - Fork commit: $(git rev-parse HEAD)
-          - Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          Configure in **Options > Advanced > Playback**:
-          - AutoSkipChapters
-          - AutoSkipChapterPatterns
-          "@ | Set-Content $notesPath -Encoding utf8
-
-          gh release view $tag --repo "${{ github.repository }}" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $zip --clobber --repo "${{ github.repository }}"
-            if ($LASTEXITCODE -ne 0) { throw 'Could not replace rolling release asset.' }
-            gh release edit $tag --repo "${{ github.repository }}" --title 'MPC-HC AutoSkip (Latest)' --notes-file $notesPath --latest
-            if ($LASTEXITCODE -ne 0) { throw 'Could not update rolling release metadata.' }
-          } else {
-            gh release create $tag $zip --repo "${{ github.repository }}" --title 'MPC-HC AutoSkip (Latest)' --notes-file $notesPath --latest
-            if ($LASTEXITCODE -ne 0) { throw 'Could not create rolling release.' }
-          }
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+          CANDIDATE_SHA: ${{ steps.sync.outputs.candidate_sha }}
+          ZIP_PATH: ${{ steps.package.outputs.zip }}
+          CHECKSUM_PATH: ${{ steps.package.outputs.checksum }}
+          AUTOSKIP_VERSION: ${{ steps.package.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: ./.autoskip/Publish-Release.ps1 -Repository $env:GITHUB_REPOSITORY -CandidateSha $env:CANDIDATE_SHA -UpstreamSha $env:UPSTREAM_SHA -Zip $env:ZIP_PATH -Checksum $env:CHECKSUM_PATH -Version $env:AUTOSKIP_VERSION -RunUrl $env:RUN_URL
 
       - name: Remove legacy AutoSkip releases and Actions artifacts
-        if: github.ref_name == 'autoskip' && steps.sync.outputs.build_needed == 'true' && steps.build.outcome == 'success'
-        shell: pwsh
+        if: steps.publish.outcome == 'success'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
-
-          $legacyTags = @(gh release list --repo "${{ github.repository }}" --limit 100 --json tagName --jq '.[] | select(.tagName | startswith("autoskip-v")) | .tagName')
-          foreach ($legacyTag in $legacyTags) {
-            if ($legacyTag) {
-              Write-Host "Deleting legacy release $legacyTag"
-              gh release delete $legacyTag --repo "${{ github.repository }}" --cleanup-tag --yes
-              if ($LASTEXITCODE -ne 0) { throw "Could not delete legacy release $legacyTag" }
+          $tags = @(gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName --jq '.[] | select(.tagName | startswith("autoskip-v")) | .tagName')
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list legacy releases.' }
+          foreach ($tag in $tags) {
+            if ($tag) {
+              gh release delete $tag --repo $env:GITHUB_REPOSITORY --cleanup-tag --yes
+              if ($LASTEXITCODE -ne 0) { throw "Could not remove legacy release $tag" }
+            }
+          }
+          $ids = @(gh api --paginate "repos/$env:GITHUB_REPOSITORY/actions/artifacts?per_page=100" --jq '.artifacts[].id')
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list old Actions artifacts.' }
+          foreach ($id in $ids) {
+            if ($id) {
+              gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$id"
+              if ($LASTEXITCODE -ne 0) { throw "Could not remove old Actions artifact $id" }
             }
           }
 
-          $artifactIds = @(gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" --jq '.artifacts[].id')
-          foreach ($artifactId in $artifactIds) {
-            if ($artifactId) {
-              Write-Host "Deleting Actions artifact $artifactId"
-              gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifactId" | Out-Null
-              if ($LASTEXITCODE -ne 0) { throw "Could not delete Actions artifact $artifactId" }
-            }
-          }
+      - name: Report the first actionable failure
+        if: failure()
+        env:
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+          CANDIDATE_SHA: ${{ steps.sync.outputs.candidate_sha }}
+        run: ./.autoskip/Report-Failure.ps1 -UpstreamSha $env:UPSTREAM_SHA -CandidateSha $env:CANDIDATE_SHA

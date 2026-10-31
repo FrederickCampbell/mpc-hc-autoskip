@@ -7,48 +7,64 @@ on:
 permissions:
   contents: read
 
-jobs:
-  lav-version:
-    runs-on: windows-2022
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
+concurrency:
+  group: autoskip-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
-      - name: Check LAV version generation with a long PATH
+jobs:
+  pipeline-checks:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    defaults:
+      run:
         shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Check real merge conflicts, rollback, stale publication, and package validation
+        run: ./.autoskip/Test-Automation.ps1
+      - name: Check release rollback at upload, asset rename, tag, and metadata failures
+        run: ./.autoskip/Test-Publication.ps1
+      - name: Check LAV version generation with a long PATH
         run: |
           $generator = Join-Path $env:RUNNER_TEMP 'upstream-genversion.cmd'
-          Invoke-WebRequest 'https://raw.githubusercontent.com/clsid2/mpc-hc/354e120c476e7e8abb796c4a5d50154f0ec17e7b/src/thirdparty/LAVFilters/genversion.cmd' -OutFile $generator
+          Invoke-WebRequest 'https://raw.githubusercontent.com/clsid2/mpc-hc/354e120c476e7e8abb796c4a5d50154f0ec17e7b/src/thirdparty/LAVFilters/genversion.cmd' -OutFile $generator -MaximumRetryCount 3 -RetryIntervalSec 5 -TimeoutSec 120
           ./.autoskip/Test-LavVersion.ps1 -Generator $generator
 
   x64-build:
-    needs: lav-version
+    needs: pipeline-checks
     runs-on: windows-2022
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-          submodules: recursive
-
-      - name: Merge the upstream revision from the failed build
-        shell: pwsh
+      - name: Prepare upstream candidate using the production merge handler
+        id: sync
         run: |
           git config user.name "github-actions[bot]"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not configure Git identity.' }
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch --no-tags https://github.com/clsid2/mpc-hc.git 354e120c476e7e8abb796c4a5d50154f0ec17e7b
-          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the upstream build candidate.' }
-          git merge --no-edit FETCH_HEAD
-          if ($LASTEXITCODE -ne 0) { throw 'Could not merge the upstream build candidate.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Could not configure Git identity.' }
+          ./.autoskip/Sync-Upstream.ps1 -ForceBuild
           git submodule sync --recursive
-          if ($LASTEXITCODE -ne 0) { throw 'Could not sync candidate submodules.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Could not synchronize submodules.' }
           git submodule update --init --recursive
-          if ($LASTEXITCODE -ne 0) { throw 'Could not update candidate submodules.' }
-
-      - name: Verify AutoSkip source markers
-        shell: pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Could not update submodules.' }
+      - name: Verify AutoSkip behavior is wired into the source
         run: ./.autoskip/Verify-AutoSkipPatch.ps1
-
       - name: Build MPC-HC x64
-        shell: pwsh
         run: ./.autoskip/Build-X64.ps1
+      - name: Validate the complete release ZIP
+        env:
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+          CANDIDATE_SHA: ${{ steps.sync.outputs.candidate_sha }}
+        run: ./.autoskip/Package-X64.ps1 -UpstreamSha $env:UPSTREAM_SHA -CandidateSha $env:CANDIDATE_SHA
+      - name: Report the first actionable failure
+        if: failure()
+        env:
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+          CANDIDATE_SHA: ${{ steps.sync.outputs.candidate_sha }}
+        run: ./.autoskip/Report-Failure.ps1 -UpstreamSha $env:UPSTREAM_SHA -CandidateSha $env:CANDIDATE_SHA
