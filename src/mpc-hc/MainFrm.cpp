@@ -5016,7 +5016,9 @@ void CMainFrame::OnFilePostClosemedia(bool bNextIsQueued/* = false*/)
         OpenSetupWindowTitle(true);
     //}
 
-    SetAlwaysOnTop(s.iOnTop);
+    if (!m_OnClose_called) {
+        SetAlwaysOnTop(s.iOnTop);
+    }
 
     // try to release external objects
     UnloadUnusedExternalObjects();
@@ -5404,7 +5406,7 @@ void CMainFrame::OnFileOpenmedia()
         dlg.SetForegroundWindow();
         return;
     }
-    if (dlg.DoModal() != IDOK || dlg.GetFileNames().IsEmpty()) {
+    if (dlg.DoModal() != IDOK || dlg.GetFileNames().IsEmpty() || AfxGetMyApp()->m_fClosingState) {
         return;
     }
 
@@ -25166,8 +25168,11 @@ bool CMainFrame::ProcessYoutubeDLURL(CString url, bool append, bool replace)
 
     m_wndStatusBar.SetStatusMessage(ResStr(IDS_CONTROLS_YOUTUBEDL));
 
-    if (!ydl.Run(url)) {
-        return false;
+    {
+        CDeferredActionScope actionScope(*this);
+        if (!ydl.Run(url)) {
+            return false;
+        }
     }
     if (!ydl.GetHttpStreams(streams, listinfo, useragent)) {
         return false;
