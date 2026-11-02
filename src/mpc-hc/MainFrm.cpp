@@ -948,8 +948,8 @@ CMainFrame::CMainFrame()
     , m_bHasBDMeta(false)
     , delayingFullScreen(false)
     , restoringWindowRect(false)
-    , mediaTypesErrorDlg(nullptr)
-    , rarEntrySelectorDlg(nullptr)
+    , openingModalDlg(nullptr)
+    , openingModalDlgThread(0)
     , m_iStreamPosPollerInterval(100)
     , currentAudioLang(_T(""))
     , currentSubLang(_T(""))
@@ -14883,15 +14883,56 @@ CWnd* CMainFrame::GetModalParent()
     return pParentWnd;
 }
 
+INT_PTR CMainFrame::DoOpeningModalDialog(CDialog& dlg)
+{
+    {
+        CAutoLock lck(&lockModalDialog);
+        // checked under the lock, CloseOpeningModalDialog runs after the flag is set
+        if (m_fOpeningAborted) {
+            return IDCANCEL;
+        }
+        openingModalDlg = &dlg;
+        openingModalDlgThread = GetCurrentThreadId();
+    }
+
+    INT_PTR ret = dlg.DoModal();
+
+    CAutoLock lck(&lockModalDialog);
+    openingModalDlg = nullptr;
+    return ret;
+}
+
+void CMainFrame::CloseOpeningModalDialog()
+{
+    bool bPosted = false;
+    for (;;) {
+        {
+            CAutoLock lck(&lockModalDialog);
+            if (!openingModalDlg) {
+                return;
+            }
+            if (!bPosted && ::IsWindow(openingModalDlg->GetSafeHwnd())) {
+                // posted, a send would wait on the dialog's thread with the lock held
+                bPosted = !!openingModalDlg->PostMessage(WM_EXTERNALCLOSE);
+            }
+            if (openingModalDlgThread == GetCurrentThreadId()) {
+                // the dialog is below us on this stack and can only end once we return
+                return;
+            }
+        }
+        // DoModal on the other thread needs this one to answer sent messages
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_SENDMESSAGE);
+        MSG msg;
+        PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+    }
+}
+
 void CMainFrame::ShowMediaTypesDialog() {
     if (!m_fOpeningAborted) {
-        CAutoLock lck(&lockModalDialog);
         CComQIPtr<IGraphBuilderDeadEnd> pGBDE = m_pGB;
         if (pGBDE && pGBDE->GetCount()) {
-            mediaTypesErrorDlg = DEBUG_NEW CMediaTypesDlg(pGBDE, GetModalParent());
-            mediaTypesErrorDlg->DoModal();
-            delete mediaTypesErrorDlg;
-            mediaTypesErrorDlg = nullptr;
+            CMediaTypesDlg dlg(pGBDE, GetModalParent());
+            DoOpeningModalDialog(dlg);
         }
     }
 }
@@ -15114,16 +15155,13 @@ HRESULT CMainFrame::HandleMultipleEntryRar(CStringW fn, int* pEntryIndex) {
             }
         } else if (!m_fOpeningAborted) {
             // Show dialog to select entry
-            CAutoLock lck(&lockModalDialog);
-            rarEntrySelectorDlg = DEBUG_NEW RarEntrySelectorDialog(&file_list, GetModalParent());
-            if (IDOK == rarEntrySelectorDlg->DoModal()) {
-                entryName = rarEntrySelectorDlg->GetCurrentEntry();
+            RarEntrySelectorDialog dlg(&file_list, GetModalParent());
+            if (IDOK == DoOpeningModalDialog(dlg)) {
+                entryName = dlg.GetCurrentEntry();
                 if (pEntryIndex) {
-                    *pEntryIndex = rarEntrySelectorDlg->GetCurrentIndex();
+                    *pEntryIndex = dlg.GetCurrentIndex();
                 }
             }
-            delete rarEntrySelectorDlg;
-            rarEntrySelectorDlg = nullptr;
         }
 
         if (entryName.GetLength() > 0) {
@@ -21536,19 +21574,8 @@ void CMainFrame::CloseMediaInternal(bool bNextIsQueued/* = false*/, bool bPendin
             PLAYER_LOG(_T("CMainFrame::CloseMedia - Need to abort graph creation"));
         }
 
-        // close pin connection error dialog
-        if (mediaTypesErrorDlg) {
-            mediaTypesErrorDlg->SendMessage(WM_EXTERNALCLOSE, 0, 0);
-            // wait till error dialog has been closed
-            CAutoLock lck(&lockModalDialog);
-        }
-
-        // close RAR entry selector dialog
-        if (rarEntrySelectorDlg) {
-            rarEntrySelectorDlg->SendMessage(WM_EXTERNALCLOSE, 0, 0);
-            // wait till dialog has been closed
-            CAutoLock lck(&lockModalDialog);
-        }
+        // close the pin connection error or RAR entry selector dialog
+        CloseOpeningModalDialog();
 
         // abort current graph task
         if (m_pGB) {
@@ -24421,6 +24448,12 @@ void CMainFrame::UpdateControlState(UpdateControlTarget target)
 }
 
 void CMainFrame::ReloadMenus() {
+    // deleting the old menu frees the item data Windows hands back to MeasureItem and
+    // DrawItem, and a settings, theme or dpi change can arrive while a menu is up
+    if (DeferIfNested(DeferredActionType::Other, [this] { ReloadMenus(); })) {
+        return;
+    }
+
     //    CMenu  defaultMenu;
     CMenu* oldMenu;
 
@@ -24857,6 +24890,7 @@ bool CMainFrame::ApplySubtitleRenderingParameters(ISubStream* pSubStream, bool b
                 pRTS->SetAlignment(s.fOverridePlacement, s.nHorPos, s.nVerPos);
             }
             pRTS->SetUseFreeType(s.bUseFreeType);
+            pRTS->SetRoundedOpaqueBox(s.bSubtitleRoundedOpaqueBox);
             pRTS->SetOpenTypeLangHint(s.strOpenTypeLangHint);
             pRTS->Deinit();
         }
@@ -25318,12 +25352,13 @@ void CMainFrame::OnSettingChange(UINT uFlags, LPCTSTR lpszSection)
 {
     __super::OnSettingChange(uFlags, lpszSection);
     if (SPI_SETHIGHCONTRAST == uFlags) {
-        ApplyThemeChange(); //the modern theme steps aside while a contrast theme is on
+        AfxGetAppSettings().ReadWindowsColorSettings(); //brings back the dark flag when contrast goes off
+        ApplyThemeChange(); //a contrast theme forces the modern dark theme
     } else if (lpszSection && 0 == _tcscmp(lpszSection, _T("ImmersiveColorSet"))) {
         CAppSettings& s = AfxGetAppSettings();
         bool wasDark = s.bWindows10DarkThemeActive;
         s.ReadWindowsColorSettings();
-        if (!AppIsThemeLoaded()) {
+        if (!AppIsThemeLoaded() || CMPCTheme::IsHighContrast()) {
             s.UpdateThemeState(); //nothing on screen follows the windows colours, but a contrast theme still clears the dark flag
         } else if (s.bWindows10DarkThemeActive != wasDark && s.eModernThemeMode == CMPCTheme::ModernThemeMode::WINDOWSDEFAULT) {
             ApplyThemeChange(); //windows switched between light and dark, which the default theme mode follows
