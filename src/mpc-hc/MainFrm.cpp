@@ -61,6 +61,7 @@
 #include "KeyProvider.h"
 #include "Translations.h"
 #include "UpdateChecker.h"
+#include "UpdateCheckerDlg.h"
 #include "WebServer.h"
 #include <ISOLang.h>
 #include <PathUtils.h>
@@ -333,6 +334,7 @@ BEGIN_MESSAGE_MAP(CMainFrame, CFrameWnd)
     ON_MESSAGE(WM_POSTOPEN, OnFilePostOpenmedia)
     ON_MESSAGE(WM_OPENFAILED, OnOpenMediaFailed)
     ON_MESSAGE(WM_MPC_RUN_DEFERRED, OnRunDeferredActions)
+    ON_MESSAGE(WM_MPC_UPDATE_CHECK_DONE, OnUpdateCheckDone)
     ON_MESSAGE(WM_MPC_UI_REQUEST, OnUIRequest)
     ON_MESSAGE(WM_TUNER_NEW_CHANNEL, OnHeadlessScanNewChannel)
     ON_MESSAGE(WM_TUNER_SCAN_END, OnHeadlessScanEnd)
@@ -1283,6 +1285,10 @@ void CMainFrame::OnDestroy()
 
     if (m_pHistoryDlg && IsWindow(m_pHistoryDlg->m_hWnd)) {
         VERIFY(m_pHistoryDlg->DestroyWindow());
+    }
+
+    if (m_pUpdateCheckerDlg && IsWindow(m_pUpdateCheckerDlg->m_hWnd)) {
+        VERIFY(m_pUpdateCheckerDlg->DestroyWindow());
     }
 
     if (m_pGraphThread && m_pGraphThread->m_hThread) {
@@ -6478,6 +6484,10 @@ static void stbi_write_to_vector(void* context, void* data, int size) {
 
 BYTE* CMainFrame::ConvertDIBTo24bppRGB(BYTE* pData, long size, int& outWidth, int& outHeight, int& outPitch)
 {
+    if (!pData || size < (long)sizeof(BITMAPINFOHEADER)) {
+        return nullptr;
+    }
+
     PBITMAPINFO bi = reinterpret_cast<PBITMAPINFO>(pData);
     PBITMAPINFOHEADER bih = &bi->bmiHeader;
     int bpp = bih->biBitCount;
@@ -6490,6 +6500,11 @@ BYTE* CMainFrame::ConvertDIBTo24bppRGB(BYTE* pData, long size, int& outWidth, in
     int w = bih->biWidth;
     int h = abs(bih->biHeight);
     int srcpitch = w * (bpp >> 3);
+
+    // biSizeImage may be 0 or too small for BI_RGB, so the pixels the copy below reads must fit in what we were given
+    if (w <= 0 || h <= 0 || (LONGLONG)sizeof(BITMAPINFOHEADER) + (LONGLONG)w * (bpp >> 3) * h > size) {
+        return nullptr;
+    }
     int dstpitch = (w * 3 + 3) / 4 * 4; // round w * 3 to next multiple of 4
 
     BYTE* p = DEBUG_NEW BYTE[dstpitch * h];
@@ -6730,6 +6745,8 @@ HRESULT CMainFrame::GetDisplayedImage(std::vector<BYTE>& dib, CString& errmsg) {
 			dib.resize(sizeof(BITMAPINFOHEADER) + bih->biSizeImage);
 			memcpy(dib.data(), dibImage, sizeof(BITMAPINFOHEADER) + bih->biSizeImage);
 			LocalFree(dibImage);
+		} else if (S_OK == hr) {
+			hr = E_FAIL;
 		}
 	}
 	else if (m_pMFVDC) {
@@ -6896,7 +6913,7 @@ void CMainFrame::SaveImage(LPCWSTR fn, bool displayed, bool includeSubtitles) {
         }
     }
 
-    if (hr == S_OK) {
+    if (hr == S_OK && !dib.empty()) {
         SaveDIB(fn, dib.data(), (long)dib.size());
         m_OSD.DisplayMessage(OSD_TOPLEFT, ResStr(IDS_OSD_IMAGE_SAVED), 3000);
     } else {
@@ -11797,7 +11814,7 @@ void CMainFrame::OnUpdateAfterplayback(CCmdUI* pCmdUI)
             return;
     }
 
-    if (IsMenu(*pCmdUI->m_pMenu)) {
+    if (pCmdUI->m_pMenu && IsMenu(*pCmdUI->m_pMenu)) {
         MENUITEMINFO mii, cii;
         ZeroMemory(&cii, sizeof(MENUITEMINFO));
         cii.cbSize = sizeof(cii);
@@ -12882,6 +12899,15 @@ void CMainFrame::OnHelpHomepage()
 void CMainFrame::OnHelpCheckForUpdate()
 {
     UpdateChecker::CheckForUpdate();
+}
+
+LRESULT CMainFrame::OnUpdateCheckDone(WPARAM wParam, LPARAM lParam)
+{
+    std::unique_ptr<UpdateCheckResult> result(reinterpret_cast<UpdateCheckResult*>(lParam));
+    if (!m_OnClose_called && !AfxGetMyApp()->m_fClosingState) {
+        UpdateChecker::HandleCheckResult(*result, this, m_pUpdateCheckerDlg);
+    }
+    return 0;
 }
 
 void CMainFrame::OnHelpToolbarImages()
